@@ -8,7 +8,7 @@ command_line:
       name: "Cytech Version"
       unique_id: cytech_version_sensor
       command: "cat /config/.cytech_version 2>/dev/null || echo unknown"
-      scan_interval: 3600
+      scan_interval: 60
   - sensor:
       name: "Cytech Notify Pending"
       unique_id: cytech_notify_pending_sensor

@@ -1,6 +1,6 @@
 {
-  "version": 7,
-  "changelog": "Fixed automation syntax (service: not action:); notifications now clear after display",
+  "version": 8,
+  "changelog": "Update buttons now hide automatically after pressing; version sensor refreshes every 60s",
   "files": [
     "first_boot.sh",
     "reset.sh",

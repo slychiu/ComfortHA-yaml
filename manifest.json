@@ -1,12 +1,13 @@
 {
-  "version": 9,
-  "changelog": "Update button now hides reliably after each press; fixed repeated press handling",
+  "version": 10,
+  "changelog": "New System dashboard with Check for Update button; Remote Access shows only QR and URL",
   "files": [
     "first_boot.sh",
     "reset.sh",
     "dev_reset.sh",
     "cytech_update.sh",
     "cytech_reject_update.sh",
+    "cytech_check_only.sh",
     "packages/cytech.yaml"
   ]
 }

@@ -1,4 +1,5 @@
 shell_command:
+  cytech_check_only: "nohup bash /config/cytech_check_only.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_update: "nohup bash /config/cytech_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_reject_update: "nohup bash /config/cytech_reject_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_clear_notify: "rm -f /config/.cytech_notify_pending"

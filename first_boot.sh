@@ -113,7 +113,7 @@ check_and_apply_updates() {
 
   # Write notification content to file — automation in packages/cytech.yaml picks it up.
   # Timestamp prefix ensures sensor state changes every write even if message is identical.
-  printf '%s\t**v%s available:** %s\n\nOpen the **Remote Access** dashboard to update or skip.' \
+  printf '%s\t**v%s available:** %s\n\nOpen the **System** dashboard to update or skip.' \
     "$(date +%s)" "$REMOTE_VER" "$CHANGELOG" > /config/.cytech_notify_pending
 
   ensure_packages_configured
@@ -309,32 +309,48 @@ if ! grep -q "^homeassistant:" /config/configuration.yaml 2>/dev/null; then
 fi
 mkdir -p /config/packages
 
-# Add update button and version card to welcome dashboard (idempotent)
+# Create System dashboard (idempotent)
 python3 - << 'PYEOF'
 import json, os
-f = '/config/.storage/lovelace.dashboard_welcome'
-if not os.path.exists(f):
-    exit(0)
-d = json.load(open(f))
-views = d.get('data', {}).get('config', {}).get('views', [])
-if not views or not views[0].get('sections'):
-    exit(0)
-if any('cytech_check_update' in str(s) for s in views[0].get('sections', [])):
-    print("Update section already present")
-    exit(0)
-update_section = {
-    "type": "grid",
-    "cards": [
-        {"type": "sensor", "entity": "sensor.cytech_version", "name": "System Version", "graph": "none"},
-        {"type": "button", "name": "Update Now", "icon": "mdi:update",
-         "tap_action": {"action": "call-service", "service": "shell_command.cytech_check_update"}},
-        {"type": "button", "name": "Skip this version", "icon": "mdi:update-lock",
-         "tap_action": {"action": "call-service", "service": "shell_command.cytech_reject_update"}},
-    ]
-}
-views[0]['sections'].append(update_section)
-json.dump(d, open(f, 'w'))
-print("Dashboard updated with update section")
+
+# 1. Add System dashboard to the dashboards list
+lf = '/config/.storage/lovelace_dashboards'
+if os.path.exists(lf):
+    ld = json.load(open(lf))
+    items = ld['data']['items']
+    if not any(i['id'] == 'system' for i in items):
+        items.append({
+            "id": "system", "show_in_sidebar": True,
+            "icon": "mdi:cog", "title": "System",
+            "require_admin": False, "mode": "storage", "url_path": "system"
+        })
+        json.dump(ld, open(lf, 'w'))
+        print("System dashboard added to sidebar")
+
+# 2. Create the System dashboard config
+sf = '/config/.storage/lovelace.system'
+if not os.path.exists(sf):
+    system_dash = {
+        "version": 1, "minor_version": 1, "key": "lovelace.system",
+        "data": {"config": {"views": [{"type": "sections", "title": "System", "sections": [{
+            "type": "grid",
+            "cards": [
+                {"type": "sensor", "entity": "sensor.cytech_version", "name": "System Version", "graph": "none"},
+                {"type": "button", "name": "Check for Update", "icon": "mdi:cloud-search",
+                 "tap_action": {"action": "call-service", "service": "shell_command.cytech_check_only"}},
+                {"type": "conditional",
+                 "conditions": [{"condition": "state", "entity": "sensor.cytech_notify_pending", "state_not": ""}],
+                 "card": {"type": "button", "name": "Update Now", "icon": "mdi:update",
+                          "tap_action": {"action": "call-service", "service": "shell_command.cytech_check_update"}}},
+                {"type": "conditional",
+                 "conditions": [{"condition": "state", "entity": "sensor.cytech_notify_pending", "state_not": ""}],
+                 "card": {"type": "button", "name": "Skip this version", "icon": "mdi:update-lock",
+                          "tap_action": {"action": "call-service", "service": "shell_command.cytech_reject_update"}}},
+            ]
+        }]}]}}
+    }
+    json.dump(system_dash, open(sf, 'w'))
+    print("System dashboard created")
 PYEOF
 
 # Start HA — reads the updated core.config

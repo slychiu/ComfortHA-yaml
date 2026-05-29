@@ -1,8 +1,17 @@
 #!/bin/bash
 #25/5/26
 exec > /config/deployment_debug.log 2>&1
-set -x
 
+# Source device-specific secrets before set -x to keep credentials out of debug log
+{ set +x; } 2>/dev/null
+if [ -f /config/.cytech_secrets ]; then
+  source /config/.cytech_secrets
+else
+  echo "ERROR: /config/.cytech_secrets not found. Cannot provision."
+  exit 1
+fi
+
+set -x
 echo "Starting Zero-Touch Deployment..."
 
 apply_discard_fix() {
@@ -22,8 +31,8 @@ apply_discard_fix() {
 get_auth_key() {
   local TOKEN AUTH_KEY
   TOKEN=$(curl -s -X POST https://api.tailscale.com/api/v2/oauth/token \
-    -d "client_id=k1jNrtbTYm11CNTRL" \
-    -d "client_secret=tskey-client-k1jNrtbTYm11CNTRL-3xoofh6SC1BuQj2LNZd91Brk4MVewDpsX" \
+    -d "client_id=${TAILSCALE_CLIENT_ID}" \
+    -d "client_secret=${TAILSCALE_CLIENT_SECRET}" \
     | jq -r '.access_token')
   AUTH_KEY=$(curl -s -X POST "https://api.tailscale.com/api/v2/tailnet/-/keys" \
     -H "Authorization: Bearer $TOKEN" \

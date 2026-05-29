@@ -84,6 +84,53 @@ REPAIR_EOF
   echo "Repair script launched in SSH addon."
 }
 
+# Downloads Cytech-managed files if manifest version > local .cytech_version.
+# Silently skips if offline or CYTECH_MANIFEST_URL is unset.
+check_and_apply_updates() {
+  [ -z "${CYTECH_MANIFEST_URL}" ] && return 0
+
+  local LOCAL_VER MANIFEST REMOTE_VER BASE_URL FILE
+  LOCAL_VER=$(cat /config/.cytech_version 2>/dev/null || echo 0)
+
+  MANIFEST=$(curl -sf --max-time 10 "${CYTECH_MANIFEST_URL}" 2>/dev/null)
+  if [ -z "$MANIFEST" ]; then
+    echo "Update check: manifest unreachable (offline?). Skipping."
+    return 0
+  fi
+
+  REMOTE_VER=$(echo "$MANIFEST" | jq -r '.version // 0')
+  echo "Update check: local=v${LOCAL_VER} remote=v${REMOTE_VER}"
+
+  if [ "$REMOTE_VER" -le "$LOCAL_VER" ] 2>/dev/null; then
+    echo "Up to date (v${LOCAL_VER})."
+    return 0
+  fi
+
+  echo "Applying update v${LOCAL_VER} -> v${REMOTE_VER}..."
+  BASE_URL="${CYTECH_MANIFEST_URL%/manifest.json}"
+
+  while IFS= read -r FILE; do
+    case "$FILE" in
+      .cytech_secrets|device_id.txt|.zero_touch_completed|configuration.yaml|secrets.yaml|"")
+        continue ;;
+      *..*) echo "Skipping unsafe path: $FILE"; continue ;;
+    esac
+    echo "Downloading $FILE..."
+    if curl -sf --max-time 30 "${BASE_URL}/${FILE}" -o "/config/${FILE}.tmp"; then
+      case "$FILE" in *.sh) chmod +x "/config/${FILE}.tmp" ;; esac
+      mv "/config/${FILE}.tmp" "/config/${FILE}"
+      echo "$FILE updated OK"
+    else
+      echo "Failed to download $FILE — aborting update"
+      rm -f "/config/${FILE}.tmp"
+      return 1
+    fi
+  done < <(echo "$MANIFEST" | jq -r '.files[]')
+
+  echo -n "$REMOTE_VER" > /config/.cytech_version
+  echo "Update complete: now at v${REMOTE_VER}"
+}
+
 # 1. Maintenance mode — already provisioned, just run health checks
 if [ -f /config/.zero_touch_completed ]; then
   echo "Already initialized. Running maintenance checks..."
@@ -91,6 +138,7 @@ if [ -f /config/.zero_touch_completed ]; then
     curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/start 2>/dev/null
     sleep 20
     apply_discard_fix
+    check_and_apply_updates
 
     TS_STATE=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
       "docker exec addon_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null" \

@@ -29,6 +29,6 @@ automation:
       - service: persistent_notification.create
         data:
           title: "Cytech configuration update"
-          message: "{{ states('sensor.cytech_notify_pending') }}"
+          message: "{{ states('sensor.cytech_notify_pending').split('\t')[-1] }}"
           notification_id: cytech_config_update
       - service: shell_command.cytech_clear_notify

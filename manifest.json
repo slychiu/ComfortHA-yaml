@@ -1,6 +1,6 @@
 {
-  "version": 8,
-  "changelog": "Update buttons now hide automatically after pressing; version sensor refreshes every 60s",
+  "version": 9,
+  "changelog": "Update button now hides reliably after each press; fixed repeated press handling",
   "files": [
     "first_boot.sh",
     "reset.sh",

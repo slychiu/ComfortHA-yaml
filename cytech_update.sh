@@ -5,7 +5,7 @@ echo "=== cytech_update.sh $(date) ==="
 source /config/.cytech_secrets
 
 notify() {
-  printf '%s' "$1" > /config/.cytech_notify_pending
+  printf '%s\t%s' "$(date +%s)" "$1" > /config/.cytech_notify_pending
 }
 
 LOCAL_VER=$(cat /config/.cytech_version 2>/dev/null || echo 0)

@@ -111,9 +111,10 @@ check_and_apply_updates() {
   echo -n "$REMOTE_VER" > /config/.cytech_update_pending
   echo "Update v${REMOTE_VER} pending user action."
 
-  # Write notification content to file — automation in packages/cytech.yaml picks it up
-  printf '**v%s available:** %s\n\nOpen the **Remote Access** dashboard to update or skip.' \
-    "$REMOTE_VER" "$CHANGELOG" > /config/.cytech_notify_pending
+  # Write notification content to file — automation in packages/cytech.yaml picks it up.
+  # Timestamp prefix ensures sensor state changes every write even if message is identical.
+  printf '%s\t**v%s available:** %s\n\nOpen the **Remote Access** dashboard to update or skip.' \
+    "$(date +%s)" "$REMOTE_VER" "$CHANGELOG" > /config/.cytech_notify_pending
 
   ensure_packages_configured
 }

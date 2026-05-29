@@ -1,6 +1,6 @@
 {
-  "version": 10,
-  "changelog": "New System dashboard with Check for Update button; Remote Access shows only QR and URL",
+  "version": 11,
+  "changelog": "Renamed System sidebar to Config Files",
   "files": [
     "first_boot.sh",
     "reset.sh",

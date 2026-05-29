@@ -321,7 +321,7 @@ if os.path.exists(lf):
     if not any(i['id'] == 'system' for i in items):
         items.append({
             "id": "system", "show_in_sidebar": True,
-            "icon": "mdi:cog", "title": "System",
+            "icon": "mdi:cog", "title": "Config Files",
             "require_admin": False, "mode": "storage", "url_path": "system"
         })
         json.dump(ld, open(lf, 'w'))
@@ -332,7 +332,7 @@ sf = '/config/.storage/lovelace.system'
 if not os.path.exists(sf):
     system_dash = {
         "version": 1, "minor_version": 1, "key": "lovelace.system",
-        "data": {"config": {"views": [{"type": "sections", "title": "System", "sections": [{
+        "data": {"config": {"views": [{"type": "sections", "title": "Config Files", "sections": [{
             "type": "grid",
             "cards": [
                 {"type": "sensor", "entity": "sensor.cytech_version", "name": "System Version", "graph": "none"},

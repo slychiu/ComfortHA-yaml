@@ -10,13 +10,7 @@ if [ -z "$PENDING_VER" ]; then
   exit 0
 fi
 
-# Advance local version to match remote so this version is not offered again
 echo -n "$PENDING_VER" > /config/.cytech_version
 rm -f /config/.cytech_update_pending
+rm -f /config/.cytech_notify_pending
 echo "Skipped update to v${PENDING_VER}."
-
-curl -s -X POST \
-  -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"notification_id":"cytech_config_update"}' \
-  http://supervisor/core/api/services/persistent_notification/dismiss 2>/dev/null || true

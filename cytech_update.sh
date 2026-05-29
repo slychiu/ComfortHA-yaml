@@ -5,33 +5,21 @@ echo "=== cytech_update.sh $(date) ==="
 source /config/.cytech_secrets
 
 notify() {
-  curl -s -X POST \
-    -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{\"title\":\"${1}\",\"message\":\"${2}\",\"notification_id\":\"cytech_config_update\"}" \
-    http://supervisor/core/api/services/persistent_notification/create 2>/dev/null || true
-}
-
-dismiss() {
-  curl -s -X POST \
-    -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d '{"notification_id":"cytech_config_update"}' \
-    http://supervisor/core/api/services/persistent_notification/dismiss 2>/dev/null || true
+  printf '%s' "$1" > /config/.cytech_notify_pending
 }
 
 LOCAL_VER=$(cat /config/.cytech_version 2>/dev/null || echo 0)
 MANIFEST=$(curl -sf --max-time 10 "${CYTECH_MANIFEST_URL}" 2>/dev/null)
 
 if [ -z "$MANIFEST" ]; then
-  notify "Cytech configuration update" "Could not reach update server. Check your internet connection."
+  notify "Could not reach update server. Check your internet connection."
   exit 1
 fi
 
 REMOTE_VER=$(echo "$MANIFEST" | jq -r '.version // 0')
 
 if [ "$REMOTE_VER" -le "$LOCAL_VER" ] 2>/dev/null; then
-  notify "Cytech configuration update" "Already on the latest version (v${LOCAL_VER})."
+  notify "Already on the latest version (v${LOCAL_VER})."
   rm -f /config/.cytech_update_pending
   exit 0
 fi
@@ -52,12 +40,11 @@ while IFS= read -r FILE; do
     echo "$FILE updated"
   else
     rm -f "/config/${FILE}.tmp"
-    notify "Cytech configuration update" "Update failed while downloading ${FILE}. Will retry on next boot."
+    notify "Update failed while downloading ${FILE}. Will retry on next boot."
     exit 1
   fi
 done < <(echo "$MANIFEST" | jq -r '.files[]')
 
 echo -n "$REMOTE_VER" > /config/.cytech_version
 rm -f /config/.cytech_update_pending
-dismiss
-notify "Cytech configuration update" "Updated to v${REMOTE_VER}: ${CHANGELOG}"
+notify "Updated to v${REMOTE_VER}: ${CHANGELOG}"

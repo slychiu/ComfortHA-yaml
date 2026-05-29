@@ -1,6 +1,6 @@
 {
-  "version": 5,
-  "changelog": "Test update — notification flow with changelog and skip option",
+  "version": 6,
+  "changelog": "Fixed notifications — now work from all contexts; update buttons in separate dashboard section",
   "files": [
     "first_boot.sh",
     "reset.sh",

@@ -1,6 +1,7 @@
 shell_command:
   cytech_check_update: "nohup bash /config/cytech_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_reject_update: "nohup bash /config/cytech_reject_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"
+  cytech_clear_notify: "rm -f /config/.cytech_notify_pending"
 
 command_line:
   - sensor:
@@ -8,3 +9,26 @@ command_line:
       unique_id: cytech_version_sensor
       command: "cat /config/.cytech_version 2>/dev/null || echo unknown"
       scan_interval: 3600
+  - sensor:
+      name: "Cytech Notify Pending"
+      unique_id: cytech_notify_pending_sensor
+      command: "cat /config/.cytech_notify_pending 2>/dev/null || echo ''"
+      scan_interval: 30
+
+automation:
+  - id: cytech_show_notification
+    alias: "Cytech: Show update notification"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: sensor.cytech_notify_pending
+    condition:
+      - condition: template
+        value_template: "{{ states('sensor.cytech_notify_pending') not in ['', 'unknown', 'unavailable'] }}"
+    action:
+      - action: persistent_notification.create
+        data:
+          title: "Cytech configuration update"
+          message: "{{ states('sensor.cytech_notify_pending') }}"
+          notification_id: cytech_config_update
+      - action: shell_command.cytech_clear_notify

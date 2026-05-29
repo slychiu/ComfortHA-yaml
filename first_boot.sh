@@ -111,12 +111,9 @@ check_and_apply_updates() {
   echo -n "$REMOTE_VER" > /config/.cytech_update_pending
   echo "Update v${REMOTE_VER} pending user action."
 
-  # Notify HA — user chooses to apply or skip via dashboard buttons
-  curl -s -X POST \
-    -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{\"title\":\"Cytech configuration update\",\"message\":\"**v${REMOTE_VER} available:** ${CHANGELOG}\\n\\nUse the dashboard buttons to update or skip this version.\",\"notification_id\":\"cytech_config_update\"}" \
-    http://supervisor/core/api/services/persistent_notification/create 2>/dev/null || true
+  # Write notification content to file — automation in packages/cytech.yaml picks it up
+  printf '**v%s available:** %s\n\nOpen the **Remote Access** dashboard to update or skip.' \
+    "$REMOTE_VER" "$CHANGELOG" > /config/.cytech_notify_pending
 
   ensure_packages_configured
 }
@@ -321,31 +318,22 @@ d = json.load(open(f))
 views = d.get('data', {}).get('config', {}).get('views', [])
 if not views or not views[0].get('sections'):
     exit(0)
-cards = views[0]['sections'][0].get('cards', [])
-if any('cytech_check_update' in str(c) for c in cards):
-    print("Update button already present")
+if any('cytech_check_update' in str(s) for s in views[0].get('sections', [])):
+    print("Update section already present")
     exit(0)
-cards.insert(0, {
-    "type": "button",
-    "name": "Skip this version",
-    "icon": "mdi:update-lock",
-    "tap_action": {"action": "call-service", "service": "shell_command.cytech_reject_update"}
-})
-cards.insert(0, {
-    "type": "button",
-    "name": "Update Now",
-    "icon": "mdi:update",
-    "tap_action": {"action": "call-service", "service": "shell_command.cytech_check_update"}
-})
-cards.insert(0, {
-    "type": "sensor",
-    "entity": "sensor.cytech_version",
-    "name": "System Version",
-    "graph": "none"
-})
-views[0]['sections'][0]['cards'] = cards
+update_section = {
+    "type": "grid",
+    "cards": [
+        {"type": "sensor", "entity": "sensor.cytech_version", "name": "System Version", "graph": "none"},
+        {"type": "button", "name": "Update Now", "icon": "mdi:update",
+         "tap_action": {"action": "call-service", "service": "shell_command.cytech_check_update"}},
+        {"type": "button", "name": "Skip this version", "icon": "mdi:update-lock",
+         "tap_action": {"action": "call-service", "service": "shell_command.cytech_reject_update"}},
+    ]
+}
+views[0]['sections'].append(update_section)
 json.dump(d, open(f, 'w'))
-print("Dashboard updated with update button and version sensor")
+print("Dashboard updated with update section")
 PYEOF
 
 # Start HA — reads the updated core.config

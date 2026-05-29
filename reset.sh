@@ -1,11 +1,11 @@
 #!/bin/bash
-#25/5/26
+#25/5/26 v3
 trap '' HUP  # survive SSH disconnect
 
 echo "Stopping Home Assistant to prevent memory overwrites..."
 ha core stop
 
-echo "Performing factory reset — erasing users, auth, mobile devices..."
+echo "Performing factory reset ï¿½ erasing users, auth, mobile devices..."
 cd /config
 
 # 1. Auth and user accounts
@@ -66,13 +66,13 @@ curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: a
 rm -f /config/.storage/frontend.user_data_*
 
 # 7. Clear Tailscale state so every cloned SD card registers as a unique device
-# Must STOP the addon first — daemon writes state back to disk on graceful shutdown if running
+# Must STOP the addon first ï¿½ daemon writes state back to disk on graceful shutdown if running
 echo "Clearing Tailscale state for fresh node identity..."
 curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_tailscale/stop
 sleep 8
 docker run --rm -v /mnt/data/supervisor/addons/data/a0d7b954_tailscale:/tsdata \
   busybox sh -c "rm -f /tsdata/tailscaled.state && rm -rf /tsdata/state && echo 'Tailscale state cleared'"
 
-echo "Reset complete. HA is stopped — safe to power off and clone SD card."
+echo "Reset complete. HA is stopped ï¿½ safe to power off and clone SD card."
 echo "On next boot, first_boot.sh will run automatically."
 date > /config/reset_complete.txt

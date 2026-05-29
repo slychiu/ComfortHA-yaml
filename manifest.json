@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "files": [
+    "first_boot.sh",
+    "reset.sh",
+    "dev_reset.sh"
+  ]
+}

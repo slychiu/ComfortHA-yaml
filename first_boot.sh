@@ -84,12 +84,13 @@ REPAIR_EOF
   echo "Repair script launched in SSH addon."
 }
 
-# Downloads Cytech-managed files if manifest version > local .cytech_version.
+# Checks for available updates and notifies HA — does NOT auto-apply.
+# User must press "Update Now" or "Skip" on the dashboard.
 # Silently skips if offline or CYTECH_MANIFEST_URL is unset.
 check_and_apply_updates() {
   [ -z "${CYTECH_MANIFEST_URL}" ] && return 0
 
-  local LOCAL_VER MANIFEST REMOTE_VER BASE_URL FILE
+  local LOCAL_VER MANIFEST REMOTE_VER CHANGELOG
   LOCAL_VER=$(cat /config/.cytech_version 2>/dev/null || echo 0)
 
   MANIFEST=$(curl -sf --max-time 10 "${CYTECH_MANIFEST_URL}" 2>/dev/null)
@@ -106,39 +107,17 @@ check_and_apply_updates() {
     return 0
   fi
 
-  echo "Applying update v${LOCAL_VER} -> v${REMOTE_VER}..."
-  BASE_URL="${CYTECH_MANIFEST_URL%/manifest.json}"
+  CHANGELOG=$(echo "$MANIFEST" | jq -r '.changelog // "No details available"')
+  echo -n "$REMOTE_VER" > /config/.cytech_update_pending
+  echo "Update v${REMOTE_VER} pending user action."
 
-  while IFS= read -r FILE; do
-    case "$FILE" in
-      .cytech_secrets|device_id.txt|.zero_touch_completed|configuration.yaml|secrets.yaml|"")
-        continue ;;
-      *..*) echo "Skipping unsafe path: $FILE"; continue ;;
-    esac
-    echo "Downloading $FILE..."
-    mkdir -p "/config/$(dirname "${FILE}")"
-    if curl -sf --max-time 30 "${BASE_URL}/${FILE}" -o "/config/${FILE}.tmp"; then
-      case "$FILE" in *.sh) chmod +x "/config/${FILE}.tmp" ;; esac
-      mv "/config/${FILE}.tmp" "/config/${FILE}"
-      echo "$FILE updated OK"
-    else
-      echo "Failed to download $FILE — aborting update"
-      rm -f "/config/${FILE}.tmp"
-      return 1
-    fi
-  done < <(echo "$MANIFEST" | jq -r '.files[]')
-
-  echo -n "$REMOTE_VER" > /config/.cytech_version
-  echo "Update complete: now at v${REMOTE_VER}"
-
-  # Notify HA that update was applied
+  # Notify HA — user chooses to apply or skip via dashboard buttons
   curl -s -X POST \
     -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"title\":\"Cytech update applied\",\"message\":\"Scripts updated to v${REMOTE_VER}\",\"notification_id\":\"cytech_update\"}" \
+    -d "{\"title\":\"Cytech configuration update\",\"message\":\"**v${REMOTE_VER} available:** ${CHANGELOG}\\n\\nUse the dashboard buttons to update or skip this version.\",\"notification_id\":\"cytech_config_update\"}" \
     http://supervisor/core/api/services/persistent_notification/create 2>/dev/null || true
 
-  # Ensure packages are loaded (for existing devices getting their first update)
   ensure_packages_configured
 }
 
@@ -348,7 +327,13 @@ if any('cytech_check_update' in str(c) for c in cards):
     exit(0)
 cards.insert(0, {
     "type": "button",
-    "name": "Check for Updates",
+    "name": "Skip this version",
+    "icon": "mdi:update-lock",
+    "tap_action": {"action": "call-service", "service": "shell_command.cytech_reject_update"}
+})
+cards.insert(0, {
+    "type": "button",
+    "name": "Update Now",
     "icon": "mdi:update",
     "tap_action": {"action": "call-service", "service": "shell_command.cytech_check_update"}
 })

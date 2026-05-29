@@ -1,10 +1,12 @@
 {
-  "version": 3,
+  "version": 4,
+  "changelog": "Added user-controlled update notifications with changelog and skip option",
   "files": [
     "first_boot.sh",
     "reset.sh",
     "dev_reset.sh",
     "cytech_update.sh",
+    "cytech_reject_update.sh",
     "packages/cytech.yaml"
   ]
 }

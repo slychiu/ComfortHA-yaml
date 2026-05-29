@@ -26,9 +26,9 @@ automation:
       - condition: template
         value_template: "{{ states('sensor.cytech_notify_pending') not in ['', 'unknown', 'unavailable'] }}"
     action:
-      - action: persistent_notification.create
+      - service: persistent_notification.create
         data:
           title: "Cytech configuration update"
           message: "{{ states('sensor.cytech_notify_pending') }}"
           notification_id: cytech_config_update
-      - action: shell_command.cytech_clear_notify
+      - service: shell_command.cytech_clear_notify

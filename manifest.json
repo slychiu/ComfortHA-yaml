@@ -1,6 +1,6 @@
 {
-  "version": 6,
-  "changelog": "Fixed notifications — now work from all contexts; update buttons in separate dashboard section",
+  "version": 7,
+  "changelog": "Fixed automation syntax (service: not action:); notifications now clear after display",
   "files": [
     "first_boot.sh",
     "reset.sh",

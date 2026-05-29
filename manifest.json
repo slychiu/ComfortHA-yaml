@@ -1,8 +1,10 @@
 {
-  "version": 1,
+  "version": 2,
   "files": [
     "first_boot.sh",
     "reset.sh",
-    "dev_reset.sh"
+    "dev_reset.sh",
+    "cytech_update.sh",
+    "packages/cytech.yaml"
   ]
 }

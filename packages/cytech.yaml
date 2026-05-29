@@ -1,0 +1,9 @@
+shell_command:
+  cytech_check_update: "nohup bash /config/cytech_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"
+
+command_line:
+  - sensor:
+      name: "Cytech Version"
+      unique_id: cytech_version_sensor
+      command: "cat /config/.cytech_version 2>/dev/null || echo unknown"
+      scan_interval: 3600

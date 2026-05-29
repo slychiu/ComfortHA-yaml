@@ -116,6 +116,7 @@ check_and_apply_updates() {
       *..*) echo "Skipping unsafe path: $FILE"; continue ;;
     esac
     echo "Downloading $FILE..."
+    mkdir -p "/config/$(dirname "${FILE}")"
     if curl -sf --max-time 30 "${BASE_URL}/${FILE}" -o "/config/${FILE}.tmp"; then
       case "$FILE" in *.sh) chmod +x "/config/${FILE}.tmp" ;; esac
       mv "/config/${FILE}.tmp" "/config/${FILE}"
@@ -129,6 +130,27 @@ check_and_apply_updates() {
 
   echo -n "$REMOTE_VER" > /config/.cytech_version
   echo "Update complete: now at v${REMOTE_VER}"
+
+  # Notify HA that update was applied
+  curl -s -X POST \
+    -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"title\":\"Cytech update applied\",\"message\":\"Scripts updated to v${REMOTE_VER}\",\"notification_id\":\"cytech_update\"}" \
+    http://supervisor/core/api/services/persistent_notification/create 2>/dev/null || true
+
+  # Ensure packages are loaded (for existing devices getting their first update)
+  ensure_packages_configured
+}
+
+# Idempotently adds homeassistant packages include to configuration.yaml.
+# Restarts HA if the line was just added so the new config is loaded.
+ensure_packages_configured() {
+  mkdir -p /config/packages
+  if ! grep -q "^homeassistant:" /config/configuration.yaml 2>/dev/null; then
+    printf '\nhomeassistant:\n  packages: !include_dir_named packages\n' >> /config/configuration.yaml
+    echo "Packages line added to configuration.yaml — restarting HA to load."
+    ha core restart || true
+  fi
 }
 
 # 1. Maintenance mode — already provisioned, just run health checks
@@ -303,6 +325,44 @@ if [ -f /config/.storage/core.config ]; then
     && mv /config/.storage/core.config.tmp /config/.storage/core.config \
     && echo "URLs written OK: ext=https://${FULL_DNS} int=http://${DEVICE_ID}.local:8123"
 fi
+# Add Cytech packages include to configuration.yaml (idempotent)
+if ! grep -q "^homeassistant:" /config/configuration.yaml 2>/dev/null; then
+  printf '\nhomeassistant:\n  packages: !include_dir_named packages\n' >> /config/configuration.yaml
+  echo "Packages line added to configuration.yaml"
+fi
+mkdir -p /config/packages
+
+# Add update button and version card to welcome dashboard (idempotent)
+python3 - << 'PYEOF'
+import json, os
+f = '/config/.storage/lovelace.dashboard_welcome'
+if not os.path.exists(f):
+    exit(0)
+d = json.load(open(f))
+views = d.get('data', {}).get('config', {}).get('views', [])
+if not views or not views[0].get('sections'):
+    exit(0)
+cards = views[0]['sections'][0].get('cards', [])
+if any('cytech_check_update' in str(c) for c in cards):
+    print("Update button already present")
+    exit(0)
+cards.insert(0, {
+    "type": "button",
+    "name": "Check for Updates",
+    "icon": "mdi:update",
+    "tap_action": {"action": "call-service", "service": "shell_command.cytech_check_update"}
+})
+cards.insert(0, {
+    "type": "sensor",
+    "entity": "sensor.cytech_version",
+    "name": "System Version",
+    "graph": "none"
+})
+views[0]['sections'][0]['cards'] = cards
+json.dump(d, open(f, 'w'))
+print("Dashboard updated with update button and version sensor")
+PYEOF
+
 # Start HA — reads the updated core.config
 ha core start
 sleep 30

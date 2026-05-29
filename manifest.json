@@ -1,6 +1,6 @@
 {
-  "version": 4,
-  "changelog": "Added user-controlled update notifications with changelog and skip option",
+  "version": 5,
+  "changelog": "Test update — notification flow with changelog and skip option",
   "files": [
     "first_boot.sh",
     "reset.sh",

@@ -1,6 +1,6 @@
 {
-  "version": 13,
-  "changelog": "Show last update result inline on Config Files dashboard",
+  "version": 14,
+  "changelog": "TEST: Zones card - remove colour coding and camelCase",
   "files": [
     "first_boot.sh",
     "reset.sh",
@@ -8,6 +8,7 @@
     "cytech_reject_update.sh",
     "cytech_check_only.sh",
     "packages/cytech.yaml",
+    "zones_dashboard.json",
     "cytech_update.sh"
   ]
 }

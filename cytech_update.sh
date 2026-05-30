@@ -48,3 +48,14 @@ done < <(echo "$MANIFEST" | jq -r '.files[]')
 echo -n "$REMOTE_VER" > /config/.cytech_version
 rm -f /config/.cytech_update_pending
 notify "Updated to v${REMOTE_VER}: ${CHANGELOG}"
+
+# Apply lovelace dashboard config if included in this update (no restart needed)
+if [ -f /config/zones_dashboard.json ]; then
+  HTTP=$(curl -s -o /tmp/lv_result.txt -w "%{http_code}" \
+    -X POST \
+    -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data-binary @/config/zones_dashboard.json \
+    "http://supervisor/core/api/lovelace/config?url_path=dashboard-zones")
+  echo "Lovelace API: HTTP $HTTP $(cat /tmp/lv_result.txt)"
+fi

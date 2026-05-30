@@ -49,13 +49,23 @@ echo -n "$REMOTE_VER" > /config/.cytech_version
 rm -f /config/.cytech_update_pending
 notify "Updated to v${REMOTE_VER}: ${CHANGELOG}"
 
-# Apply lovelace dashboard config if included in this update (no restart needed)
+# Apply lovelace dashboard config if zones_dashboard.json was part of this update.
+# Delete it after applying so future updates without it don't re-apply stale config.
+# HA restart is required for lovelace storage changes to take effect.
 if [ -f /config/zones_dashboard.json ]; then
-  HTTP=$(curl -s -o /tmp/lv_result.txt -w "%{http_code}" \
-    -X POST \
-    -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
-    -H "Content-Type: application/json" \
-    --data-binary @/config/zones_dashboard.json \
-    "http://supervisor/core/api/lovelace/config?url_path=dashboard-zones")
-  echo "Lovelace API: HTTP $HTTP $(cat /tmp/lv_result.txt)"
+  python3 -c "
+import json
+with open('/config/zones_dashboard.json') as f:
+    config = json.load(f)
+with open('/config/.storage/lovelace.dashboard_zones') as f:
+    storage = json.load(f)
+storage['data']['config'] = config
+with open('/config/.storage/lovelace.dashboard_zones', 'w') as f:
+    json.dump(storage, f)
+print('Lovelace dashboard updated')
+"
+  rm -f /config/zones_dashboard.json
+  curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
+    http://supervisor/core/restart
+  echo "HA restarting to apply dashboard changes..."
 fi

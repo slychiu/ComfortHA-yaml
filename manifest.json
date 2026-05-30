@@ -1,6 +1,6 @@
 {
-  "version": 14,
-  "changelog": "TEST: Zones card - remove colour coding and camelCase",
+  "version": 15,
+  "changelog": "TEST v15: Zones card - no colour coding, no camelCase",
   "files": [
     "first_boot.sh",
     "reset.sh",

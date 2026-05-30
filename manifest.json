@@ -1,6 +1,6 @@
 {
-  "version": 17,
-  "changelog": "Restore colours and camelCase; fix Config Files buttons layout",
+  "version": 18,
+  "changelog": "Fix: restore Comfort Entities zones card colours and camelCase",
   "files": [
     "first_boot.sh",
     "reset.sh",
@@ -9,8 +9,6 @@
     "cytech_check_only.sh",
     "packages/cytech.yaml",
     "zones_dashboard.json",
-    "alarm_dashboard.json",
-    "system_dashboard.json",
     "cytech_update.sh"
   ]
 }

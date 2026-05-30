@@ -5,9 +5,9 @@
     "first_boot.sh",
     "reset.sh",
     "dev_reset.sh",
-    "cytech_update.sh",
     "cytech_reject_update.sh",
     "cytech_check_only.sh",
-    "packages/cytech.yaml"
+    "packages/cytech.yaml",
+    "cytech_update.sh"
   ]
 }

@@ -1,6 +1,6 @@
 {
-  "version": 16,
-  "changelog": "TEST v16: Remove colour and camelCase from all cards",
+  "version": 17,
+  "changelog": "Restore colours and camelCase; fix Config Files buttons layout",
   "files": [
     "first_boot.sh",
     "reset.sh",
@@ -10,6 +10,7 @@
     "packages/cytech.yaml",
     "zones_dashboard.json",
     "alarm_dashboard.json",
+    "system_dashboard.json",
     "cytech_update.sh"
   ]
 }

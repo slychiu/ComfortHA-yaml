@@ -337,16 +337,18 @@ if not os.path.exists(sf):
             "cards": [
                 {"type": "sensor", "entity": "sensor.cytech_version", "name": "System Version", "graph": "none"},
                 {"type": "markdown", "content": "{% set s = states('sensor.cytech_last_result') %}{% if s not in ['', 'unknown', 'unavailable'] %}{{ s.split('\\t')[-1] }}{% endif %}"},
-                {"type": "button", "name": "Check for Update", "icon": "mdi:cloud-search",
-                 "tap_action": {"action": "call-service", "service": "shell_command.cytech_check_only"}},
-                {"type": "conditional",
-                 "conditions": [{"condition": "state", "entity": "sensor.cytech_update_pending", "state_not": ""}],
-                 "card": {"type": "button", "name": "Update Now", "icon": "mdi:update",
-                          "tap_action": {"action": "call-service", "service": "shell_command.cytech_check_update"}}},
-                {"type": "conditional",
-                 "conditions": [{"condition": "state", "entity": "sensor.cytech_update_pending", "state_not": ""}],
-                 "card": {"type": "button", "name": "Skip this version", "icon": "mdi:update-lock",
-                          "tap_action": {"action": "call-service", "service": "shell_command.cytech_reject_update"}}},
+                {"type": "grid", "columns": 3, "square": False, "cards": [
+                    {"type": "button", "name": "Check for Update", "icon": "mdi:cloud-search",
+                     "tap_action": {"action": "call-service", "service": "shell_command.cytech_check_only"}},
+                    {"type": "conditional",
+                     "conditions": [{"condition": "state", "entity": "sensor.cytech_update_pending", "state_not": ""}],
+                     "card": {"type": "button", "name": "Update Now", "icon": "mdi:update",
+                              "tap_action": {"action": "call-service", "service": "shell_command.cytech_check_update"}}},
+                    {"type": "conditional",
+                     "conditions": [{"condition": "state", "entity": "sensor.cytech_update_pending", "state_not": ""}],
+                     "card": {"type": "button", "name": "Skip this version", "icon": "mdi:update-lock",
+                              "tap_action": {"action": "call-service", "service": "shell_command.cytech_reject_update"}}},
+                ]},
             ]
         }]}]}}
     }

@@ -20,6 +20,11 @@ command_line:
       unique_id: cytech_update_pending_sensor
       command: "cat /config/.cytech_update_pending 2>/dev/null || echo ''"
       scan_interval: 30
+  - sensor:
+      name: "Cytech Last Result"
+      unique_id: cytech_last_result_sensor
+      command: "cat /config/.cytech_last_result 2>/dev/null || echo ''"
+      scan_interval: 30
 
 automation:
   - id: cytech_show_notification

@@ -1,6 +1,6 @@
 {
-  "version": 12,
-  "changelog": "Fix Update Now button visibility; add update pending sensor",
+  "version": 13,
+  "changelog": "Show last update result inline on Config Files dashboard",
   "files": [
     "first_boot.sh",
     "reset.sh",

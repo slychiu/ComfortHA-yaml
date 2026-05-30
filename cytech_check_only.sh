@@ -17,11 +17,11 @@ REMOTE_VER=$(echo "$MANIFEST" | jq -r '.version // 0')
 CHANGELOG=$(echo "$MANIFEST" | jq -r '.changelog // "No details available"')
 
 if [ "$REMOTE_VER" -le "$LOCAL_VER" ] 2>/dev/null; then
-  printf '%s\tSystem is up to date (v%s).' \
-    "$(date +%s)" "$LOCAL_VER" > /config/.cytech_notify_pending
+  MSG="System is up to date (v${LOCAL_VER})."
+  printf '%s\t%s' "$(date +%s)" "$MSG" | tee /config/.cytech_notify_pending > /config/.cytech_last_result
   exit 0
 fi
 
 echo -n "$REMOTE_VER" > /config/.cytech_update_pending
-printf '%s\t**v%s available:** %s\n\nOpen the **Config Files** dashboard to update or skip.' \
-  "$(date +%s)" "$REMOTE_VER" "$CHANGELOG" > /config/.cytech_notify_pending
+MSG="**v${REMOTE_VER} available:** ${CHANGELOG}"$'\n\nPress **Update Now** to apply.'
+printf '%s\t%s' "$(date +%s)" "$MSG" | tee /config/.cytech_notify_pending > /config/.cytech_last_result

@@ -336,6 +336,7 @@ if not os.path.exists(sf):
             "type": "grid",
             "cards": [
                 {"type": "sensor", "entity": "sensor.cytech_version", "name": "System Version", "graph": "none"},
+                {"type": "markdown", "content": "{% set s = states('sensor.cytech_last_result') %}{% if s not in ['', 'unknown', 'unavailable'] %}{{ s.split('\\t')[-1] }}{% endif %}"},
                 {"type": "button", "name": "Check for Update", "icon": "mdi:cloud-search",
                  "tap_action": {"action": "call-service", "service": "shell_command.cytech_check_only"}},
                 {"type": "conditional",

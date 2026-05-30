@@ -49,22 +49,30 @@ echo -n "$REMOTE_VER" > /config/.cytech_version
 rm -f /config/.cytech_update_pending
 notify "Updated to v${REMOTE_VER}: ${CHANGELOG}"
 
-# Apply lovelace dashboard config if zones_dashboard.json was part of this update.
-# Delete it after applying so future updates without it don't re-apply stale config.
+# Apply lovelace dashboard configs if included in this update.
+# Files are deleted after applying so future updates don't re-apply stale configs.
 # HA restart is required for lovelace storage changes to take effect.
-if [ -f /config/zones_dashboard.json ]; then
+LOVELACE_CHANGED=0
+apply_dashboard() {
+  local SRC="$1" DEST="$2"
+  [ -f "/config/${SRC}" ] || return
   python3 -c "
-import json
-with open('/config/zones_dashboard.json') as f:
+import json, sys
+with open('/config/${SRC}') as f:
     config = json.load(f)
-with open('/config/.storage/lovelace.dashboard_zones') as f:
+with open('/config/.storage/${DEST}') as f:
     storage = json.load(f)
 storage['data']['config'] = config
-with open('/config/.storage/lovelace.dashboard_zones', 'w') as f:
+with open('/config/.storage/${DEST}', 'w') as f:
     json.dump(storage, f)
-print('Lovelace dashboard updated')
-"
-  rm -f /config/zones_dashboard.json
+print('${DEST} updated')
+" && rm -f "/config/${SRC}" && LOVELACE_CHANGED=1
+}
+
+apply_dashboard zones_dashboard.json lovelace.dashboard_zones
+apply_dashboard alarm_dashboard.json lovelace.comfort_alarm
+
+if [ "$LOVELACE_CHANGED" = "1" ]; then
   curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
     http://supervisor/core/restart
   echo "HA restarting to apply dashboard changes..."

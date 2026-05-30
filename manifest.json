@@ -1,6 +1,6 @@
 {
-  "version": 15,
-  "changelog": "TEST v15: Zones card - no colour coding, no camelCase",
+  "version": 16,
+  "changelog": "TEST v16: Remove colour and camelCase from all cards",
   "files": [
     "first_boot.sh",
     "reset.sh",
@@ -9,6 +9,7 @@
     "cytech_check_only.sh",
     "packages/cytech.yaml",
     "zones_dashboard.json",
+    "alarm_dashboard.json",
     "cytech_update.sh"
   ]
 }

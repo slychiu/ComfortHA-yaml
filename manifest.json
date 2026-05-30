@@ -1,6 +1,6 @@
 {
-  "version": 18,
-  "changelog": "Fix: restore Comfort Entities zones card colours and camelCase",
+  "version": 1,
+  "changelog": "Initial release",
   "files": [
     "first_boot.sh",
     "reset.sh",
@@ -8,7 +8,6 @@
     "cytech_reject_update.sh",
     "cytech_check_only.sh",
     "packages/cytech.yaml",
-    "zones_dashboard.json",
     "cytech_update.sh"
   ]
 }

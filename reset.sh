@@ -50,6 +50,10 @@ rm -f ~/.bash_history
 # 6. Re-arm the Zero-Touch deployment script
 echo "Resetting Zero-Touch deployment triggers..."
 rm -f /config/.zero_touch_completed
+rm -f /config/.cytech_version
+rm -f /config/.cytech_update_pending
+rm -f /config/.cytech_notify_pending
+rm -f /config/.cytech_last_result
 echo "Initializing Secure Link..." > /config/device_id.txt
 rm -f /config/authorized_keys
 rm -rf /config/.ssh

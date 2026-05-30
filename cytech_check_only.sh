@@ -23,5 +23,5 @@ if [ "$REMOTE_VER" -le "$LOCAL_VER" ] 2>/dev/null; then
 fi
 
 echo -n "$REMOTE_VER" > /config/.cytech_update_pending
-printf '%s\t**v%s available:** %s\n\nOpen the **System** dashboard to update or skip.' \
+printf '%s\t**v%s available:** %s\n\nOpen the **Config Files** dashboard to update or skip.' \
   "$(date +%s)" "$REMOTE_VER" "$CHANGELOG" > /config/.cytech_notify_pending

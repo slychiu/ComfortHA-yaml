@@ -113,7 +113,7 @@ check_and_apply_updates() {
 
   # Write notification content to file — automation in packages/cytech.yaml picks it up.
   # Timestamp prefix ensures sensor state changes every write even if message is identical.
-  printf '%s\t**v%s available:** %s\n\nOpen the **System** dashboard to update or skip.' \
+  printf '%s\t**v%s available:** %s\n\nOpen the **Config Files** dashboard to update or skip.' \
     "$(date +%s)" "$REMOTE_VER" "$CHANGELOG" > /config/.cytech_notify_pending
 
   ensure_packages_configured
@@ -339,11 +339,11 @@ if not os.path.exists(sf):
                 {"type": "button", "name": "Check for Update", "icon": "mdi:cloud-search",
                  "tap_action": {"action": "call-service", "service": "shell_command.cytech_check_only"}},
                 {"type": "conditional",
-                 "conditions": [{"condition": "state", "entity": "sensor.cytech_notify_pending", "state_not": ""}],
+                 "conditions": [{"condition": "state", "entity": "sensor.cytech_update_pending", "state_not": ""}],
                  "card": {"type": "button", "name": "Update Now", "icon": "mdi:update",
                           "tap_action": {"action": "call-service", "service": "shell_command.cytech_check_update"}}},
                 {"type": "conditional",
-                 "conditions": [{"condition": "state", "entity": "sensor.cytech_notify_pending", "state_not": ""}],
+                 "conditions": [{"condition": "state", "entity": "sensor.cytech_update_pending", "state_not": ""}],
                  "card": {"type": "button", "name": "Skip this version", "icon": "mdi:update-lock",
                           "tap_action": {"action": "call-service", "service": "shell_command.cytech_reject_update"}}},
             ]

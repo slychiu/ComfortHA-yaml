@@ -1,6 +1,6 @@
 {
-  "version": 11,
-  "changelog": "Renamed System sidebar to Config Files",
+  "version": 12,
+  "changelog": "Fix Update Now button visibility; add update pending sensor",
   "files": [
     "first_boot.sh",
     "reset.sh",

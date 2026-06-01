@@ -1,6 +1,7 @@
 #!/bin/bash
 #25/5/26 v3
 trap '' HUP  # survive SSH disconnect
+exec > >(tee /config/reset.log) 2>&1
 
 echo "Stopping Home Assistant to prevent memory overwrites..."
 ha core stop

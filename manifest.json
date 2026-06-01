@@ -1,6 +1,6 @@
 {
-  "version": 2,
-  "changelog": "Local URL always cytech.local:8123 regardless of Tailscale hostname",
+  "version": 3,
+  "changelog": "reset.sh logs to /config/reset.log so output is readable after SSH drops",
   "files": [
     "first_boot.sh",
     "reset.sh",

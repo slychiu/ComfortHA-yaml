@@ -67,11 +67,10 @@ FULL_DNS=$(docker exec addon_a0d7b954_tailscale /opt/tailscale status --json 2>/
 ha core stop
 sleep 20
 jq --arg ext "https://${FULL_DNS}" \
-   --arg int "http://${DEVICE_ID}.local:8123" \
-   '.data.external_url = $ext | .data.internal_url = $int' \
+   '.data.external_url = $ext | .data.internal_url = "http://cytech.local:8123"' \
     /config/.storage/core.config > /config/.storage/core.config.tmp \
     && mv /config/.storage/core.config.tmp /config/.storage/core.config \
-    && echo "URLs updated: ext=https://${FULL_DNS} int=http://${DEVICE_ID}.local:8123"
+    && echo "URLs updated: ext=https://${FULL_DNS} int=http://cytech.local:8123"
 ha core start
 sleep 30
 curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
@@ -296,11 +295,10 @@ sleep 20
 # Write external + internal URLs while HA is stopped
 if [ -f /config/.storage/core.config ]; then
   jq --arg ext "https://${FULL_DNS}" \
-     --arg int "http://${DEVICE_ID}.local:8123" \
-    '.data.external_url = $ext | .data.internal_url = $int' \
+    '.data.external_url = $ext | .data.internal_url = "http://cytech.local:8123"' \
     /config/.storage/core.config > /config/.storage/core.config.tmp \
     && mv /config/.storage/core.config.tmp /config/.storage/core.config \
-    && echo "URLs written OK: ext=https://${FULL_DNS} int=http://${DEVICE_ID}.local:8123"
+    && echo "URLs written OK: ext=https://${FULL_DNS} int=http://cytech.local:8123"
 fi
 # Add Cytech packages include to configuration.yaml (idempotent)
 if ! grep -q "^homeassistant:" /config/configuration.yaml 2>/dev/null; then

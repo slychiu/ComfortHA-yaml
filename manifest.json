@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "changelog": "Initial release",
+  "version": 2,
+  "changelog": "Local URL always cytech.local:8123 regardless of Tailscale hostname",
   "files": [
     "first_boot.sh",
     "reset.sh",

@@ -129,6 +129,37 @@ ensure_packages_configured() {
   fi
 }
 
+# Idempotently ensures the SSH addon's watcher loop is present. This is what
+# makes the Reset to Default button work: shell_command.dev_reset just drops
+# a trigger file (safe to run from Core's own container), and this loop --
+# running inside the SSH addon's own container, which survives Core stopping
+# and has the `ha` CLI -- picks it up and actually runs dev_reset.sh.
+#
+# It's addon config, not a tracked file, so it can't ship via manifest.json's
+# files[] list, and it deliberately does NOT live in cytech_update.sh either:
+# a device that jumps straight from, say, v3 to v5 applies that jump using
+# its OLD, already-installed cytech_update.sh, which wouldn't have this step
+# yet -- the new code would just sit unused on disk until some later update.
+# Living here instead means it runs using whatever first_boot.sh was just
+# freshly downloaded, on the very next boot after any update touches it
+# (every update does), regardless of how many versions were skipped.
+ensure_reset_watcher() {
+  local WATCHER_CMD SSH_INFO HAS_WATCHER
+  WATCHER_CMD="nohup sh -c 'while true; do if [ -f /config/.reset_requested ]; then rm -f /config/.reset_requested; bash /config/dev_reset.sh >> /config/dev_reset_watcher.log 2>&1; fi; sleep 5; done' >/config/dev_reset_watcher_boot.log 2>&1 &"
+  SSH_INFO=$(curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info)
+  HAS_WATCHER=$(echo "$SSH_INFO" | jq --arg cmd "$WATCHER_CMD" '.data.options.init_commands // [] | index($cmd) != null')
+  if [ "$HAS_WATCHER" != "true" ]; then
+    echo "$SSH_INFO" | jq --arg cmd "$WATCHER_CMD" \
+      '.data.options | .init_commands = ((.init_commands // []) + [$cmd]) | {options: .}' \
+      > /tmp/ssh_watcher_opts.json
+    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
+         -d @/tmp/ssh_watcher_opts.json http://supervisor/addons/a0d7b954_ssh/options
+    echo "SSH addon watcher init_command added (takes effect next addon start)."
+  else
+    echo "SSH addon watcher init_command already present."
+  fi
+}
+
 # 1. Maintenance mode — already provisioned, just run health checks
 if [ -f /config/.zero_touch_completed ]; then
   echo "Already initialized. Running maintenance checks..."
@@ -137,6 +168,7 @@ if [ -f /config/.zero_touch_completed ]; then
     sleep 20
     apply_discard_fix
     check_and_apply_updates
+    ensure_reset_watcher
 
     TS_STATE=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
       "docker exec addon_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null" \

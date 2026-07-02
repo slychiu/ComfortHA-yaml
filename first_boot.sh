@@ -89,7 +89,7 @@ REPAIR_EOF
 check_and_apply_updates() {
   [ -z "${CYTECH_MANIFEST_URL}" ] && return 0
 
-  local LOCAL_VER MANIFEST REMOTE_VER CHANGELOG
+  local LOCAL_VER MANIFEST REMOTE_VER CHANGELOG WARNINGS
   LOCAL_VER=$(cat /config/.cytech_version 2>/dev/null || echo 0)
 
   MANIFEST=$(curl -sf --max-time 10 "${CYTECH_MANIFEST_URL}" 2>/dev/null)
@@ -107,13 +107,28 @@ check_and_apply_updates() {
   fi
 
   CHANGELOG=$(echo "$MANIFEST" | jq -r '.changelog // "No details available"')
+
+  # Every update overwrites packages/cytech.yaml unconditionally (no merge,
+  # no backup) so that warning always applies. Beyond that, a manifest can
+  # list release-specific risks (e.g. "resets the Comfort Entities dashboard
+  # to its default layout") via an optional "warnings" array -- surfaced here
+  # so the user sees them before pressing Update Now, not after.
+  WARNINGS=$(echo "$MANIFEST" | jq -r '
+    ["Any custom edits to packages/cytech.yaml will be overwritten."]
+    + (.warnings // [])
+    | map("- " + .) | join("\n")
+  ')
+
   echo -n "$REMOTE_VER" > /config/.cytech_update_pending
   echo "Update v${REMOTE_VER} pending user action."
 
-  # Write notification content to file — automation in packages/cytech.yaml picks it up.
+  # Write notification content to file — automation in packages/cytech.yaml
+  # picks it up for the popup, and the Config Files dashboard renders this
+  # same content directly so the warnings sit right next to the Update Now
+  # button, not just in a notification that's easy to dismiss unread.
   # Timestamp prefix ensures sensor state changes every write even if message is identical.
-  printf '%s\t**v%s available:** %s\n\nOpen the **Config Files** dashboard to update or skip.' \
-    "$(date +%s)" "$REMOTE_VER" "$CHANGELOG" > /config/.cytech_notify_pending
+  printf '%s\t**v%s available:** %s\n\n**Before you update:**\n%s' \
+    "$(date +%s)" "$REMOTE_VER" "$CHANGELOG" "$WARNINGS" > /config/.cytech_notify_pending
 
   ensure_packages_configured
 }
@@ -366,7 +381,7 @@ if not os.path.exists(sf):
             "type": "grid",
             "cards": [
                 {"type": "sensor", "entity": "sensor.cytech_version", "name": "System Version", "graph": "none"},
-                {"type": "markdown", "content": "{% set s = states('sensor.cytech_last_result') %}{% if s not in ['', 'unknown', 'unavailable'] %}{{ s.split('\\t')[-1] }}{% endif %}"},
+                {"type": "markdown", "content": "{% set pending = states('sensor.cytech_update_pending') %}{% if pending not in ['', 'unknown', 'unavailable'] %}{{ states('sensor.cytech_notify_pending').split('\\t')[-1] }}{% else %}{% set s = states('sensor.cytech_last_result') %}{% if s not in ['', 'unknown', 'unavailable'] %}{{ s.split('\\t')[-1] }}{% endif %}{% endif %}"},
                 {"type": "grid", "columns": 3, "square": False, "cards": [
                     {"type": "button", "name": "Check for Update", "icon": "mdi:cloud-search",
                      "tap_action": {"action": "call-service", "service": "shell_command.cytech_check_only"}},

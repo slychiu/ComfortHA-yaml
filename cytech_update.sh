@@ -64,6 +64,12 @@ LOVELACE_CHANGED=0
 apply_dashboard() {
   local SRC="$1" DEST="$2"
   [ -f "/config/${SRC}" ] || return
+  # This replaces the dashboard's entire config wholesale -- any local
+  # customization (rearranged cards, renamed zones, added entities) would
+  # otherwise be silently lost with no way to recover it. Keep one backup of
+  # whatever was there immediately before this update; not a full history,
+  # but enough to undo a bad surprise without needing to reset the device.
+  cp "/config/.storage/${DEST}" "/config/.storage/${DEST}.pre_update_backup" 2>/dev/null
   python3 -c "
 import json, sys
 with open('/config/${SRC}') as f:
@@ -73,7 +79,7 @@ with open('/config/.storage/${DEST}') as f:
 storage['data']['config'] = config
 with open('/config/.storage/${DEST}', 'w') as f:
     json.dump(storage, f)
-print('${DEST} updated')
+print('${DEST} updated (previous config backed up to ${DEST}.pre_update_backup)')
 " && rm -f "/config/${SRC}" && LOVELACE_CHANGED=1
 }
 

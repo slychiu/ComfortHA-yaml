@@ -49,6 +49,27 @@ echo -n "$REMOTE_VER" > /config/.cytech_version
 rm -f /config/.cytech_update_pending
 notify "Updated to v${REMOTE_VER}: ${CHANGELOG}"
 
+# Ensure the SSH addon's watcher loop is present. This is what makes the
+# Reset to Default button work: shell_command.dev_reset just drops a trigger
+# file (safe to run from Core's own container), and this loop -- running
+# inside the SSH addon's own container, which survives Core stopping and has
+# the `ha` CLI -- picks it up and actually runs dev_reset.sh. It's addon
+# config, not a tracked file, so it can't ship via the files[] list above and
+# has to be pushed here idempotently on every update instead.
+WATCHER_CMD="nohup sh -c 'while true; do if [ -f /config/.reset_requested ]; then rm -f /config/.reset_requested; bash /config/dev_reset.sh >> /config/dev_reset_watcher.log 2>&1; fi; sleep 5; done' >/config/dev_reset_watcher_boot.log 2>&1 &"
+SSH_INFO=$(curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info)
+HAS_WATCHER=$(echo "$SSH_INFO" | jq --arg cmd "$WATCHER_CMD" '.data.options.init_commands // [] | index($cmd) != null')
+if [ "$HAS_WATCHER" != "true" ]; then
+  echo "$SSH_INFO" | jq --arg cmd "$WATCHER_CMD" \
+    '.data.options | .init_commands = ((.init_commands // []) + [$cmd]) | {options: .}' \
+    > /tmp/ssh_watcher_opts.json
+  curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
+       -d @/tmp/ssh_watcher_opts.json http://supervisor/addons/a0d7b954_ssh/options
+  echo "SSH addon watcher init_command added (takes effect next addon start)."
+else
+  echo "SSH addon watcher init_command already present."
+fi
+
 # Apply lovelace dashboard configs if included in this update.
 # Files are deleted after applying so future updates don't re-apply stale configs.
 # HA restart is required for lovelace storage changes to take effect.

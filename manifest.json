@@ -1,6 +1,6 @@
 {
-  "version": 3,
-  "changelog": "reset.sh logs to /config/reset.log so output is readable after SSH drops",
+  "version": 4,
+  "changelog": "Reset to Default button now actually works (was silently broken -- shell_command ran inside Core's own container and couldn't survive its own core-stop); dev_reset.sh now blanks the SSH addon password on reset; first_boot.sh clears the provisioning SSH key once it's no longer needed",
   "files": [
     "first_boot.sh",
     "reset.sh",

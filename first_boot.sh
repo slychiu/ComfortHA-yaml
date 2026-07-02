@@ -359,6 +359,12 @@ ha core start
 sleep 30
 # Stop SSH addon (lockdown complete)
 curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/stop
+# Clear the provisioning SSH key now that Tailscale setup and the DISCARD fix are done.
+# It has no further use and is the last standing passwordless entry point into the box.
+curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info \
+  | jq '.data.options | .ssh.authorized_keys = [] | {options: .}' > /tmp/ssh_lockdown_opts.json
+curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
+     -d @/tmp/ssh_lockdown_opts.json http://supervisor/addons/a0d7b954_ssh/options
 echo "=== finish_firstboot complete $(date) ==="
 FINISH_EOF
     chmod +x /config/finish_firstboot.sh

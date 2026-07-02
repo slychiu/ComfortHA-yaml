@@ -1,6 +1,9 @@
 {
-  "version": 4,
-  "changelog": "Reset to Default button now actually works (was silently broken -- shell_command ran inside Core's own container and couldn't survive its own core-stop); dev_reset.sh now blanks the SSH addon password on reset; first_boot.sh clears the provisioning SSH key once it's no longer needed",
+  "version": 5,
+  "changelog": "Reset to Default dashboard now ships to every device (not just ones set up manually); Config Files page shows the full changelog and warnings for a pending update, not just the version number; fixed a bug where long update messages silently showed as blank/unknown due to Home Assistant's 255-character sensor state limit",
+  "warnings": [
+    "Config Files dashboard layout will be refreshed to show pending-update details -- if you customized it, back up your changes first."
+  ],
   "files": [
     "first_boot.sh",
     "reset.sh",

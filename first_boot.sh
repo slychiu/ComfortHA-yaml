@@ -89,7 +89,7 @@ REPAIR_EOF
 check_and_apply_updates() {
   [ -z "${CYTECH_MANIFEST_URL}" ] && return 0
 
-  local LOCAL_VER MANIFEST REMOTE_VER CHANGELOG WARNINGS
+  local LOCAL_VER MANIFEST REMOTE_VER CHANGELOG WARNINGS MSG
   LOCAL_VER=$(cat /config/.cytech_version 2>/dev/null || echo 0)
 
   MANIFEST=$(curl -sf --max-time 10 "${CYTECH_MANIFEST_URL}" 2>/dev/null)
@@ -122,25 +122,35 @@ check_and_apply_updates() {
   echo -n "$REMOTE_VER" > /config/.cytech_update_pending
   echo "Update v${REMOTE_VER} pending user action."
 
-  # Write notification content to file — automation in packages/cytech.yaml
-  # picks it up for the popup, and the Config Files dashboard renders this
-  # same content directly so the warnings sit right next to the Update Now
-  # button, not just in a notification that's easy to dismiss unread.
-  # Timestamp prefix ensures sensor state changes every write even if message is identical.
-  printf '%s\t**v%s available:** %s\n\n**Before you update:**\n%s' \
-    "$(date +%s)" "$REMOTE_VER" "$CHANGELOG" "$WARNINGS" > /config/.cytech_notify_pending
+  # .cytech_notify_pending drives the one-time popup (an automation in
+  # packages/cytech.yaml clears it right after showing that). Also write the
+  # same content to .cytech_pending_message, which is NOT auto-cleared, so
+  # the Config Files dashboard has something stable to render next to the
+  # Update Now button for as long as the update is actually pending.
+  #
+  # Written as {"ts": ..., "message": ...} JSON, not raw text: sensor STATE
+  # values are capped at 255 characters in HA and silently become "unknown"
+  # past that, but the "message" attribute (read via json_attributes) has no
+  # such limit. jq builds it so the message text -- which can contain quotes,
+  # newlines, whatever a manifest author writes -- gets escaped correctly.
+  MSG=$(printf '**v%s available:** %s\n\n**Before you update:**\n%s' "$REMOTE_VER" "$CHANGELOG" "$WARNINGS")
+  jq -n --arg ts "$(date +%s)" --arg msg "$MSG" '{ts: $ts, message: $msg}' > /config/.cytech_notify_pending
+  jq -n --arg ts "$(date +%s)" --arg msg "$MSG" '{ts: $ts, message: $msg}' > /config/.cytech_pending_message
 
   ensure_packages_configured
 }
 
 # Idempotently adds homeassistant packages include to configuration.yaml.
 # Restarts HA if the line was just added so the new config is loaded.
+# Uses the raw Supervisor API rather than the `ha` CLI: this function runs via
+# shell_command, i.e. inside Core's own container, which doesn't have `ha`
+# installed -- only curl and $SUPERVISOR_TOKEN, same as everywhere else here.
 ensure_packages_configured() {
   mkdir -p /config/packages
   if ! grep -q "^homeassistant:" /config/configuration.yaml 2>/dev/null; then
     printf '\nhomeassistant:\n  packages: !include_dir_named packages\n' >> /config/configuration.yaml
     echo "Packages line added to configuration.yaml — restarting HA to load."
-    ha core restart || true
+    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/restart || true
   fi
 }
 
@@ -175,6 +185,104 @@ ensure_reset_watcher() {
   fi
 }
 
+# Idempotently ensures the Reset to Default dashboard is registered, and
+# refreshes the Config Files dashboard's markdown card if it's running an
+# older template. Devices create their System dashboard once during initial
+# provisioning and never touch it again (create-if-missing, not
+# create-or-update), so already-deployed devices would otherwise never pick
+# up template improvements like the pre-update warning list. The refresh
+# path backs up the previous config first, same reasoning as apply_dashboard
+# in cytech_update.sh: it's a wholesale overwrite, and anything an installer
+# added on top of the managed cards would otherwise just be gone.
+ensure_reset_dashboard() {
+  local RESULT
+  RESULT=$(python3 - << 'PYEOF'
+import json, os
+
+# 1. Register the Reset to Default dashboard if missing.
+lf = '/config/.storage/lovelace_dashboards'
+if os.path.exists(lf):
+    ld = json.load(open(lf))
+    items = ld['data']['items']
+    if not any(i['id'] == 'reset_default' for i in items):
+        items.append({
+            "id": "reset_default", "show_in_sidebar": True,
+            "icon": "mdi:restore-alert", "title": "Reset to Default",
+            "require_admin": True, "mode": "storage", "url_path": "reset-default"
+        })
+        json.dump(ld, open(lf, 'w'))
+        print("Reset to Default dashboard registered")
+
+rf = '/config/.storage/lovelace.reset_default'
+if not os.path.exists(rf):
+    warning_md = (
+        "# Reset to Default\n\n"
+        "This resets **all users, passwords, and paired phones** (mobile app "
+        "links) and restarts onboarding -- exactly like a factory-fresh setup.\n\n"
+        "Your Comfort alarm configuration, automations, and remote access link "
+        "are **not** affected.\n\n"
+        "**This cannot be undone.** Use this to hand the system to a new user, "
+        "or if account access is lost."
+    )
+    reset_dash = {
+        "version": 1, "minor_version": 1, "key": "lovelace.reset_default",
+        "data": {"config": {"views": [{"type": "sections", "sections": [{
+            "type": "grid",
+            "cards": [
+                {"type": "markdown", "content": warning_md},
+                {"type": "button", "name": "Reset to Default", "icon": "mdi:restore-alert",
+                 "show_name": True, "show_icon": True,
+                 "tap_action": {"action": "call-service", "service": "shell_command.dev_reset",
+                                "confirmation": {"text": "This will erase all users, passwords, and paired phones, then restart onboarding. This cannot be undone. Continue?"}}}
+            ]
+        }]}]}}
+    }
+    json.dump(reset_dash, open(rf, 'w'))
+    print("Reset to Default dashboard created")
+
+# 2. Refresh the Config Files dashboard's markdown card if it's stale --
+#    detect via an explicit version marker embedded as a Jinja comment
+#    (invisible when rendered), not by guessing from which sensor names
+#    happen to appear in the content. A previous version of this check
+#    looked for the string "cytech_pending_message", but that sensor's
+#    *name* appeared in both the old (broken, states()) and new (fixed,
+#    state_attr()) template text, so it never actually detected staleness.
+#    Bump CYTECH_DASHBOARD_TEMPLATE_VERSION whenever this template changes.
+CYTECH_DASHBOARD_TEMPLATE_VERSION = "cytech_dashboard_v2"
+sf = '/config/.storage/lovelace.system'
+if os.path.exists(sf):
+    raw = open(sf).read()
+    if CYTECH_DASHBOARD_TEMPLATE_VERSION not in raw:
+        backup = sf + '.pre_v5_backup'
+        open(backup, 'w').write(raw)
+        sd = json.loads(raw)
+        try:
+            cards = sd['data']['config']['views'][0]['sections'][0]['cards']
+            for i, c in enumerate(cards):
+                if c.get('type') == 'markdown' and ('cytech_last_result' in c.get('content', '') or 'cytech_notify_pending' in c.get('content', '') or 'cytech_pending_message' in c.get('content', '')):
+                    cards[i]['content'] = (
+                        "{# " + CYTECH_DASHBOARD_TEMPLATE_VERSION + " #}"
+                        "{% set pending = states('sensor.cytech_update_pending') %}"
+                        "{% if pending not in ['', 'unknown', 'unavailable'] %}"
+                        "{{ state_attr('sensor.cytech_pending_message', 'message') | default('') }}"
+                        "{% else %}"
+                        "{{ state_attr('sensor.cytech_last_result', 'message') | default('') }}"
+                        "{% endif %}"
+                    )
+                    break
+            json.dump(sd, open(sf, 'w'))
+            print("Config Files dashboard template refreshed (backup: " + backup + ")")
+        except (KeyError, IndexError):
+            print("Config Files dashboard structure unrecognized -- skipping refresh")
+PYEOF
+)
+  echo "$RESULT"
+  if echo "$RESULT" | grep -qE "registered|created|refreshed"; then
+    echo "Dashboard changes applied — restarting HA to load them."
+    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/restart || true
+  fi
+}
+
 # 1. Maintenance mode — already provisioned, just run health checks
 if [ -f /config/.zero_touch_completed ]; then
   echo "Already initialized. Running maintenance checks..."
@@ -184,6 +292,7 @@ if [ -f /config/.zero_touch_completed ]; then
     apply_discard_fix
     check_and_apply_updates
     ensure_reset_watcher
+    ensure_reset_dashboard
 
     TS_STATE=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
       "docker exec addon_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null" \
@@ -381,7 +490,7 @@ if not os.path.exists(sf):
             "type": "grid",
             "cards": [
                 {"type": "sensor", "entity": "sensor.cytech_version", "name": "System Version", "graph": "none"},
-                {"type": "markdown", "content": "{% set pending = states('sensor.cytech_update_pending') %}{% if pending not in ['', 'unknown', 'unavailable'] %}{{ states('sensor.cytech_notify_pending').split('\\t')[-1] }}{% else %}{% set s = states('sensor.cytech_last_result') %}{% if s not in ['', 'unknown', 'unavailable'] %}{{ s.split('\\t')[-1] }}{% endif %}{% endif %}"},
+                {"type": "markdown", "content": "{# cytech_dashboard_v2 #}{% set pending = states('sensor.cytech_update_pending') %}{% if pending not in ['', 'unknown', 'unavailable'] %}{{ state_attr('sensor.cytech_pending_message', 'message') | default('') }}{% else %}{{ state_attr('sensor.cytech_last_result', 'message') | default('') }}{% endif %}"},
                 {"type": "grid", "columns": 3, "square": False, "cards": [
                     {"type": "button", "name": "Check for Update", "icon": "mdi:cloud-search",
                      "tap_action": {"action": "call-service", "service": "shell_command.cytech_check_only"}},

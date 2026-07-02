@@ -13,4 +13,5 @@ fi
 echo -n "$PENDING_VER" > /config/.cytech_version
 rm -f /config/.cytech_update_pending
 rm -f /config/.cytech_notify_pending
+rm -f /config/.cytech_pending_message
 echo "Skipped update to v${PENDING_VER}."

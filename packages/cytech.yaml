@@ -12,9 +12,31 @@ command_line:
       command: "cat /config/.cytech_version 2>/dev/null || echo unknown"
       scan_interval: 60
   - sensor:
+      # State is just the write timestamp (so the sensor reliably updates
+      # even when the message text is unchanged); the actual text lives in
+      # the "message" attribute, not the state. Sensor states are capped at
+      # 255 characters in HA -- anything longer silently becomes "unknown",
+      # which is exactly what broke this once warning text got appended.
+      # Attributes have no such limit.
       name: "Cytech Notify Pending"
       unique_id: cytech_notify_pending_sensor
-      command: "cat /config/.cytech_notify_pending 2>/dev/null || echo ''"
+      command: "cat /config/.cytech_notify_pending 2>/dev/null || echo '{}'"
+      value_template: "{{ value_json.ts | default('') }}"
+      json_attributes:
+        - message
+      scan_interval: 30
+  - sensor:
+      # Same content as Cytech Notify Pending, but that file gets deleted by
+      # the automation below right after showing its one-time popup -- this
+      # one is written at the same time but only cleared when the update is
+      # actually applied or skipped, so the Config Files dashboard has
+      # something stable to read while a decision is still pending.
+      name: "Cytech Pending Message"
+      unique_id: cytech_pending_message_sensor
+      command: "cat /config/.cytech_pending_message 2>/dev/null || echo '{}'"
+      value_template: "{{ value_json.ts | default('') }}"
+      json_attributes:
+        - message
       scan_interval: 30
   - sensor:
       name: "Cytech Update Pending"
@@ -24,7 +46,10 @@ command_line:
   - sensor:
       name: "Cytech Last Result"
       unique_id: cytech_last_result_sensor
-      command: "cat /config/.cytech_last_result 2>/dev/null || echo ''"
+      command: "cat /config/.cytech_last_result 2>/dev/null || echo '{}'"
+      value_template: "{{ value_json.ts | default('') }}"
+      json_attributes:
+        - message
       scan_interval: 30
 
 automation:
@@ -41,6 +66,6 @@ automation:
       - service: persistent_notification.create
         data:
           title: "Cytech configuration update"
-          message: "{{ states('sensor.cytech_notify_pending').split('\t')[-1] }}"
+          message: "{{ state_attr('sensor.cytech_notify_pending', 'message') }}"
           notification_id: cytech_config_update
       - service: shell_command.cytech_clear_notify

@@ -4,8 +4,13 @@ exec >> /config/cytech_update.log 2>&1
 echo "=== cytech_update.sh $(date) ==="
 source /config/.cytech_secrets
 
+# Sensor STATE values are capped at 255 characters in HA and silently become
+# "unknown" past that; the "message" attribute (read via json_attributes)
+# has no such limit, so status text is written as JSON, not raw text.
 notify() {
-  printf '%s\t%s' "$(date +%s)" "$1" | tee /config/.cytech_notify_pending > /config/.cytech_last_result
+  local json
+  json=$(jq -n --arg ts "$(date +%s)" --arg msg "$1" '{ts: $ts, message: $msg}')
+  echo "$json" | tee /config/.cytech_notify_pending > /config/.cytech_last_result
 }
 
 LOCAL_VER=$(cat /config/.cytech_version 2>/dev/null || echo 0)
@@ -47,6 +52,7 @@ done < <(echo "$MANIFEST" | jq -r '.files[]')
 
 echo -n "$REMOTE_VER" > /config/.cytech_version
 rm -f /config/.cytech_update_pending
+rm -f /config/.cytech_pending_message
 notify "Updated to v${REMOTE_VER}: ${CHANGELOG}"
 
 # Note: the SSH addon watcher (which makes Reset to Default work) is NOT

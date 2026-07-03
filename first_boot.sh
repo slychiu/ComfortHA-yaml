@@ -323,6 +323,24 @@ ensure_remote_qr() {
 
 # 1. Maintenance mode — already provisioned, just run health checks
 if [ -f /config/.zero_touch_completed ]; then
+  # A Reset to Default cycle's finish_firstboot.sh runs as a background job
+  # inside the SSH addon's own container and does its OWN ha core start
+  # partway through (to reload URLs) before finishing its cleanup. That
+  # start triggers HA to boot again, which re-runs first_boot.sh -- and
+  # since .zero_touch_completed already exists by then, THIS maintenance
+  # branch runs concurrently with the still-active finish_firstboot.sh, in
+  # the same container. This branch's own SSH-addon-stop call at the end
+  # (unconditional, for lockdown) would kill finish_firstboot.sh before it
+  # can reach its own cleanup -- caught live 2026-07-03, reproduced
+  # multiple times with no external interference (ruled out by leaving a
+  # cycle completely untouched and still seeing it happen). .reset_cycle_active
+  # is already the correct signal for "a cycle, including finish_firstboot.sh's
+  # tail, may still be in progress" -- defer entirely rather than risk any
+  # of this branch's steps racing it.
+  if [ -f /config/.reset_cycle_active ]; then
+    echo "Reset cycle still in progress -- skipping maintenance checks this pass."
+    exit 0
+  fi
   echo "Already initialized. Running maintenance checks..."
   if [ -f /config/.ssh/id_rsa ]; then
     curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/start 2>/dev/null

@@ -1,7 +1,9 @@
 {
-  "version": 9,
-  "changelog": "The remote-access QR code's one-shot generation during provisioning has no retry -- if it fails (network hiccup, DNS not ready, etc.) the QR stays broken forever with nothing to notice or fix it. Added a self-heal check (ensure_remote_qr) to first_boot.sh's maintenance-mode branch, alongside the existing watcher/dashboard self-heals, so a missing QR gets regenerated on the next boot automatically.",
-  "warnings": [],
+  "version": 10,
+  "changelog": "Fixed the Remote Access QR code going stale after a Reset to Default or golden-image clone: its image URL never changed, so browsers kept showing an old cached QR pointing at the device's previous Tailscale identity. The welcome dashboard is now a managed file (welcome_dashboard.json) so this reaches every existing device on update, not just newly-cloned ones -- the image URL now includes a cache-busting ?v={{ dev_id }} that changes whenever the device re-registers.",
+  "warnings": [
+    "HA will restart automatically to apply the updated Remote Access dashboard. Any manual customization of that specific dashboard will be overwritten (previous version backed up to lovelace.dashboard_welcome.pre_update_backup)."
+  ],
   "files": [
     "first_boot.sh",
     "reset.sh",
@@ -9,6 +11,7 @@
     "cytech_reject_update.sh",
     "cytech_check_only.sh",
     "packages/cytech.yaml",
-    "cytech_update.sh"
+    "cytech_update.sh",
+    "welcome_dashboard.json"
   ]
 }

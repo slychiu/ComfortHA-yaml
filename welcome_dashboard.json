@@ -1,0 +1,18 @@
+{
+  "views": [
+    {
+      "type": "sections",
+      "sections": [
+        {
+          "type": "grid",
+          "cards": [
+            {
+              "type": "markdown",
+              "content": "# Remote Access — Cytech Smart Home\n\n{% set dev_id = states('sensor.device_id') %}\n{% if dev_id and 'Initializing' not in dev_id %}\nYour permanent remote access link:\n\n> ### [https://{{ dev_id }}.tailad4a00.ts.net](https://{{ dev_id }}.tailad4a00.ts.net)\n\n---\n\n**🌐 Browser Access**\n\nScan with your phone camera to open in a browser:\n\n![Remote Access QR](/local/remote_access_qr.png?v={{ dev_id }})\n\n---\n\n**📱 Home Assistant Companion App**\n\n**On home Wi-Fi:** Open the app → tap + → it finds this system automatically.\n\n**Away from home:** Open the app → Add Server → Manually Add Server → type:\n\n`https://{{ dev_id }}.tailad4a00.ts.net`\n\n{% else %}\n> ⏳ **Generating Secure Remote Link... Please wait up to 3 minutes, then refresh this page.**\n{% endif %}\n\n*Do not share this link outside your household.*"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

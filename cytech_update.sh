@@ -92,6 +92,7 @@ print('${DEST} updated (previous config backed up to ${DEST}.pre_update_backup)'
 apply_dashboard zones_dashboard.json lovelace.dashboard_zones
 apply_dashboard alarm_dashboard.json lovelace.comfort_alarm
 apply_dashboard system_dashboard.json lovelace.system
+apply_dashboard welcome_dashboard.json lovelace.dashboard_welcome
 
 if [ "$LOVELACE_CHANGED" = "1" ]; then
   curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" \

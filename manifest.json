@@ -1,6 +1,6 @@
 {
-  "version": 8,
-  "changelog": "Fixed reset.sh and first_boot.sh's production path both wiping the wrong Tailscale data directory (/addons/data/... instead of /apps/data/...), which no-op'd silently -- every factory-reset device was reconnecting with its OLD Tailscale identity instead of registering fresh. This broke the golden-image cloning workflow: cloned SD cards would all share one Funnel URL instead of each getting a unique one.",
+  "version": 9,
+  "changelog": "The remote-access QR code's one-shot generation during provisioning has no retry -- if it fails (network hiccup, DNS not ready, etc.) the QR stays broken forever with nothing to notice or fix it. Added a self-heal check (ensure_remote_qr) to first_boot.sh's maintenance-mode branch, alongside the existing watcher/dashboard self-heals, so a missing QR gets regenerated on the next boot automatically.",
   "warnings": [],
   "files": [
     "first_boot.sh",

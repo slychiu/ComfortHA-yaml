@@ -283,6 +283,28 @@ PYEOF
   fi
 }
 
+# Idempotently ensures the remote-access QR code exists. The one-shot curl
+# to api.qrserver.com during initial provisioning (step 9 below) has no
+# retry -- if it fails (network hiccup, DNS not ready yet, etc.) the QR
+# stays missing forever with nothing to notice or regenerate it. Observed
+# this happen twice in one day (2026-07-03) for two different underlying
+# causes. Self-heals here instead, same pattern as ensure_reset_watcher/
+# ensure_reset_dashboard. Uses -s (exists AND non-empty) rather than -f,
+# since a failed curl can leave behind a 0-byte file that -f would treat
+# as "already there."
+ensure_remote_qr() {
+  if [ ! -s /config/www/remote_access_qr.png ]; then
+    local DEV_ID
+    DEV_ID=$(cat /config/device_id.txt 2>/dev/null)
+    if [ -n "$DEV_ID" ] && [ "$DEV_ID" != "Initializing Secure Link..." ]; then
+      mkdir -p /config/www
+      curl -s "https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=https://${DEV_ID}.tailad4a00.ts.net&margin=10" \
+        -o /config/www/remote_access_qr.png
+      echo "Remote access QR code was missing -- regenerated for ${DEV_ID}."
+    fi
+  fi
+}
+
 # 1. Maintenance mode — already provisioned, just run health checks
 if [ -f /config/.zero_touch_completed ]; then
   echo "Already initialized. Running maintenance checks..."
@@ -293,6 +315,7 @@ if [ -f /config/.zero_touch_completed ]; then
     check_and_apply_updates
     ensure_reset_watcher
     ensure_reset_dashboard
+    ensure_remote_qr
 
     TS_STATE=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
       "docker exec addon_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null" \

@@ -33,6 +33,13 @@ CHANGELOG=$(echo "$MANIFEST" | jq -r '.changelog // "No details available"')
 echo "Applying update v${LOCAL_VER} -> v${REMOTE_VER}: ${CHANGELOG}"
 BASE_URL="${CYTECH_MANIFEST_URL%/manifest.json}"
 
+# Tracked separately from LOVELACE_CHANGED below (declared later, closer to
+# where it's used) because packages/cytech.yaml holds live HA config
+# (shell_command/sensor/automation definitions) that -- like lovelace
+# storage changes -- silently doesn't take effect until HA restarts. A
+# content compare (not just "was it in the file list") avoids restarting
+# on every single update when this file happens to be unchanged.
+PACKAGES_CHANGED=0
 while IFS= read -r FILE; do
   case "$FILE" in
     .cytech_secrets|device_id.txt|.zero_touch_completed|configuration.yaml|secrets.yaml|"") continue ;;
@@ -41,6 +48,9 @@ while IFS= read -r FILE; do
   mkdir -p "/config/$(dirname "${FILE}")"
   if curl -sf --max-time 30 "${BASE_URL}/${FILE}" -o "/config/${FILE}.tmp"; then
     case "$FILE" in *.sh) chmod +x "/config/${FILE}.tmp" ;; esac
+    if [ "$FILE" = "packages/cytech.yaml" ] && ! cmp -s "/config/${FILE}" "/config/${FILE}.tmp" 2>/dev/null; then
+      PACKAGES_CHANGED=1
+    fi
     mv "/config/${FILE}.tmp" "/config/${FILE}"
     echo "$FILE updated"
   else
@@ -94,8 +104,8 @@ apply_dashboard alarm_dashboard.json lovelace.comfort_alarm
 apply_dashboard system_dashboard.json lovelace.system
 apply_dashboard welcome_dashboard.json lovelace.dashboard_welcome
 
-if [ "$LOVELACE_CHANGED" = "1" ]; then
+if [ "$LOVELACE_CHANGED" = "1" ] || [ "$PACKAGES_CHANGED" = "1" ]; then
   curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
     http://supervisor/core/restart
-  echo "HA restarting to apply dashboard changes..."
+  echo "HA restarting to apply dashboard/package changes..."
 fi

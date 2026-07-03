@@ -3,7 +3,16 @@ shell_command:
   cytech_check_update: "nohup bash /config/cytech_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_reject_update: "nohup bash /config/cytech_reject_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_clear_notify: "rm -f /config/.cytech_notify_pending"
-  dev_reset: "touch /config/.reset_requested"
+  # The reset watcher only runs while the SSH addon is up (it's launched via
+  # that addon's init_commands), and the addon is normally STOPPED in steady
+  # state (finish_firstboot.sh locks it down as its last step, boot: manual
+  # so it never auto-starts). A real click from a real customer would
+  # otherwise touch .reset_requested with nothing running to ever process
+  # it -- caught live 2026-07-03 right after v11's lockdown fix started
+  # actually working for the first time, which is what finally exposed
+  # this. The button now explicitly starts the addon itself before
+  # touching the trigger, rather than assuming it's already running.
+  dev_reset: "curl -s -X POST -H \"Authorization: Bearer $SUPERVISOR_TOKEN\" http://supervisor/addons/a0d7b954_ssh/start > /dev/null 2>&1; touch /config/.reset_requested"
 
 command_line:
   - sensor:

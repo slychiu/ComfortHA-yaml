@@ -1,7 +1,9 @@
 {
-  "version": 13,
-  "changelog": "Fixed a race where a Reset to Default cycle's own finish_firstboot.sh could get killed by an unrelated, concurrently-triggered maintenance-mode pass of first_boot.sh -- both run inside the SSH addon's container, and the maintenance pass unconditionally stops that addon as its last step. Reproduced with zero external interference (SSH left completely untouched during the cycle). The maintenance branch now defers entirely if .reset_cycle_active is set, instead of racing an in-progress cycle.",
-  "warnings": [],
+  "version": 14,
+  "changelog": "Fixed Reset to Default not working at all in the SSH addon's normal, correctly-locked-down steady state (boot: manual, stopped) -- the reset watcher only runs while that addon is up, so a real click had nothing running to process it, and by the time anyone noticed and started the addon, the trigger looked stale and got silently discarded. The button now explicitly starts the SSH addon itself before touching the trigger. Also: cytech_update.sh now restarts HA when packages/cytech.yaml actually changes (needed for this fix, and any future one, to actually take effect -- previously only lovelace dashboard changes triggered an auto-restart).",
+  "warnings": [
+    "HA will restart automatically after this update to load the new shell_command definition."
+  ],
   "files": [
     "first_boot.sh",
     "reset.sh",

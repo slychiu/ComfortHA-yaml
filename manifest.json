@@ -1,6 +1,6 @@
 {
-  "version": 11,
-  "changelog": "Fixed finish_firstboot.sh stopping its own SSH addon container before finishing its cleanup steps -- it runs *inside* that container, so stopping it could kill the script before it cleared the provisioning SSH key or the Reset to Default debounce flag (.reset_cycle_active), silently leaving both in a bad state. Reordered so cleanup happens before the self-stop, not after.",
+  "version": 12,
+  "changelog": "Fixed a stray Reset to Default trigger re-firing when the SSH addon restarts. The reset watcher only runs while that addon is up; a click queued right as it stops (e.g. during the previous cycle's own lockdown step) sat unconsumed until the addon was next started, at which point it fired immediately -- even minutes later, with no relation to a fresh click. The watcher now discards any trigger older than 1 minute instead of blindly acting on it. Also fixed the watcher-update mechanism to replace an outdated watcher on already-provisioned devices, not just add one to brand-new devices.",
   "warnings": [],
   "files": [
     "first_boot.sh",

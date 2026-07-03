@@ -169,19 +169,35 @@ ensure_packages_configured() {
 # freshly downloaded, on the very next boot after any update touches it
 # (every update does), regardless of how many versions were skipped.
 ensure_reset_watcher() {
-  local WATCHER_CMD SSH_INFO HAS_WATCHER
-  WATCHER_CMD="nohup sh -c 'while true; do if [ -f /config/.reset_requested ]; then rm -f /config/.reset_requested; bash /config/dev_reset.sh >> /config/dev_reset_watcher.log 2>&1; fi; sleep 5; done' >/config/dev_reset_watcher_boot.log 2>&1 &"
+  local WATCHER_CMD SSH_INFO ALREADY_CURRENT
+  # The watcher only runs while the SSH addon container is up (it's launched
+  # via that addon's init_commands). If a Reset to Default click queues
+  # .reset_requested right as the addon is stopping (e.g. finish_firstboot.sh's
+  # own lockdown step at the end of a cycle), that trigger sits unconsumed
+  # until the addon is next started -- at which point a naive watcher fires
+  # it immediately, even though it no longer represents a fresh click. Caught
+  # live 2026-07-03: restarting the SSH addon after an unrelated completed
+  # cycle re-triggered an entire new reset. Fixed by only acting on the
+  # trigger if it's under a minute old (well above the 5s poll interval for
+  # a genuine live click, well below how long a stale one can realistically
+  # sit); anything older gets silently discarded instead of fired.
+  WATCHER_CMD="nohup sh -c 'while true; do if [ -n \"\$(find /config/.reset_requested -mmin -1 2>/dev/null)\" ]; then rm -f /config/.reset_requested; bash /config/dev_reset.sh >> /config/dev_reset_watcher.log 2>&1; elif [ -f /config/.reset_requested ]; then rm -f /config/.reset_requested; fi; sleep 5; done' >/config/dev_reset_watcher_boot.log 2>&1 &"
   SSH_INFO=$(curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info)
-  HAS_WATCHER=$(echo "$SSH_INFO" | jq --arg cmd "$WATCHER_CMD" '.data.options.init_commands // [] | index($cmd) != null')
-  if [ "$HAS_WATCHER" != "true" ]; then
+  ALREADY_CURRENT=$(echo "$SSH_INFO" | jq --arg cmd "$WATCHER_CMD" '.data.options.init_commands // [] | index($cmd) != null')
+  if [ "$ALREADY_CURRENT" != "true" ]; then
+    # Strip out any prior version of the watcher (matched by the stable
+    # substring "reset_requested", present in every version) before adding
+    # the current one -- a plain add-if-missing check would never replace
+    # an outdated watcher already baked into an existing device's SSH addon
+    # config, so a fix here would only ever reach brand-new devices.
     echo "$SSH_INFO" | jq --arg cmd "$WATCHER_CMD" \
-      '.data.options | .init_commands = ((.init_commands // []) + [$cmd]) | {options: .}' \
+      '.data.options | .init_commands = ((.init_commands // []) | map(select(contains("reset_requested") | not)) + [$cmd]) | {options: .}' \
       > /tmp/ssh_watcher_opts.json
     curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
          -d @/tmp/ssh_watcher_opts.json http://supervisor/addons/a0d7b954_ssh/options
-    echo "SSH addon watcher init_command added (takes effect next addon start)."
+    echo "SSH addon watcher init_command added/updated (takes effect next addon start)."
   else
-    echo "SSH addon watcher init_command already present."
+    echo "SSH addon watcher init_command already up to date."
   fi
 }
 

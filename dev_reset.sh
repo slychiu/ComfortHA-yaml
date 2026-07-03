@@ -4,17 +4,23 @@
 # Preserves tailscaled.state so the cached TLS cert is reused (no Let's Encrypt rate limit hit).
 trap '' HUP
 
-# Refuse to run if a previous reset/provisioning cycle is still in progress.
-# .zero_touch_completed only reappears once first_boot.sh finishes, and this
-# script removes it at the start of every cycle below. There's no "in
-# progress" indicator on the Reset to Default button and the full cycle
-# takes ~3-4 minutes, so clicking it more than once is an easy mistake --
-# without this guard, a second click's `ha core stop` would interrupt the
-# first cycle's first_boot.sh mid-flight instead of being a harmless no-op.
-if [ ! -f /config/.zero_touch_completed ]; then
+# Refuse to run if a previous reset cycle is still active. Uses a dedicated
+# flag rather than .zero_touch_completed -- that file gets touched by
+# first_boot.sh's dev-reset-mode branch within ~15-30s of HA restarting (to
+# stop first_boot.sh re-provisioning on the *next* boot), long before the
+# full cycle actually finishes: finish_firstboot.sh restarts HA a *second*
+# time ~3-4 min later to write the Tailscale URL and set up dashboards.
+# A guard keyed on .zero_touch_completed never fires because it's already
+# back before a second click even lands. This flag is set here and only
+# cleared at the tail of finish_firstboot.sh (see first_boot.sh), i.e. once
+# the whole two-restart cycle is genuinely done. Treated as stale after
+# 10 minutes so a crashed cycle (e.g. Tailscale never reconnects) can't
+# permanently brick the button.
+if [ -n "$(find /config/.reset_cycle_active -mmin -10 2>/dev/null)" ]; then
   echo "Reset already in progress -- ignoring duplicate trigger."
   exit 0
 fi
+touch /config/.reset_cycle_active
 
 echo "Dev reset: stopping HA..."
 ha core stop

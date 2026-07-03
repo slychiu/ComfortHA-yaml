@@ -521,6 +521,10 @@ curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0
   | jq '.data.options | .ssh.authorized_keys = [] | {options: .}' > /tmp/ssh_lockdown_opts.json
 curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
      -d @/tmp/ssh_lockdown_opts.json http://supervisor/addons/a0d7b954_ssh/options
+# The whole two-restart reset cycle is genuinely done now -- safe for
+# dev_reset.sh's debounce guard to allow another run. No-op if unset
+# (e.g. production reset.sh path, which never sets this flag).
+rm -f /config/.reset_cycle_active
 echo "=== finish_firstboot complete $(date) ==="
 FINISH_EOF
     chmod +x /config/finish_firstboot.sh

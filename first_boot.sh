@@ -536,10 +536,17 @@ PYEOF
 # Start HA — reads the updated core.config
 ha core start
 sleep 30
-# Stop SSH addon (lockdown complete)
-curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/stop
 # Clear the provisioning SSH key now that Tailscale setup and the DISCARD fix are done.
 # It has no further use and is the last standing passwordless entry point into the box.
+# Must happen BEFORE stopping the SSH addon below: this whole script runs
+# *inside* the SSH addon's own container (see the ssh -i ... root@a0d7b954-ssh
+# dispatch that launches it), so stopping that addon tears down the container
+# this script is running in -- nohup only protects against a closed terminal,
+# not the container itself disappearing. Anything ordered after the stop call
+# was never actually guaranteed to run, and in practice often didn't: this
+# used to be ordered stop-then-cleanup, which silently left old provisioning
+# keys valid forever and .reset_cycle_active stuck (only ever clearing via
+# its 10-minute staleness fallback, never via real completion).
 curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info \
   | jq '.data.options | .ssh.authorized_keys = [] | {options: .}' > /tmp/ssh_lockdown_opts.json
 curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
@@ -549,6 +556,10 @@ curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: a
 # (e.g. production reset.sh path, which never sets this flag).
 rm -f /config/.reset_cycle_active
 echo "=== finish_firstboot complete $(date) ==="
+# Stop SSH addon (lockdown complete). Last line on purpose -- it's safe for
+# this to kill the script's own container now, since everything that
+# actually matters has already happened above.
+curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/stop
 FINISH_EOF
     chmod +x /config/finish_firstboot.sh
 

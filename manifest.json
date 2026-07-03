@@ -1,9 +1,7 @@
 {
-  "version": 10,
-  "changelog": "Fixed the Remote Access QR code going stale after a Reset to Default or golden-image clone: its image URL never changed, so browsers kept showing an old cached QR pointing at the device's previous Tailscale identity. The welcome dashboard is now a managed file (welcome_dashboard.json) so this reaches every existing device on update, not just newly-cloned ones -- the image URL now includes a cache-busting ?v={{ dev_id }} that changes whenever the device re-registers.",
-  "warnings": [
-    "HA will restart automatically to apply the updated Remote Access dashboard. Any manual customization of that specific dashboard will be overwritten (previous version backed up to lovelace.dashboard_welcome.pre_update_backup)."
-  ],
+  "version": 11,
+  "changelog": "Fixed finish_firstboot.sh stopping its own SSH addon container before finishing its cleanup steps -- it runs *inside* that container, so stopping it could kill the script before it cleared the provisioning SSH key or the Reset to Default debounce flag (.reset_cycle_active), silently leaving both in a bad state. Reordered so cleanup happens before the self-stop, not after.",
+  "warnings": [],
   "files": [
     "first_boot.sh",
     "reset.sh",

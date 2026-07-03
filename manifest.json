@@ -1,6 +1,6 @@
 {
-  "version": 7,
-  "changelog": "Fixed v6's duplicate-click guard, which never actually fired: it checked .zero_touch_completed, which gets touched ~15-30s into the cycle (before the second HA restart from finish_firstboot.sh, ~3-4 min later) rather than at true completion. Now uses a dedicated flag set at the start of dev_reset.sh and cleared at the true end of the full two-restart cycle.",
+  "version": 8,
+  "changelog": "Fixed reset.sh and first_boot.sh's production path both wiping the wrong Tailscale data directory (/addons/data/... instead of /apps/data/...), which no-op'd silently -- every factory-reset device was reconnecting with its OLD Tailscale identity instead of registering fresh. This broke the golden-image cloning workflow: cloned SD cards would all share one Funnel URL instead of each getting a unique one.",
   "warnings": [],
   "files": [
     "first_boot.sh",

@@ -75,7 +75,7 @@ rm -f /config/.storage/frontend.user_data_*
 echo "Clearing Tailscale state for fresh node identity..."
 curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_tailscale/stop
 sleep 8
-docker run --rm -v /mnt/data/supervisor/addons/data/a0d7b954_tailscale:/tsdata \
+docker run --rm -v /mnt/data/supervisor/apps/data/a0d7b954_tailscale:/tsdata \
   busybox sh -c "rm -f /tsdata/tailscaled.state && rm -rf /tsdata/state && echo 'Tailscale state cleared'"
 
 echo "Reset complete. HA is stopped � safe to power off and clone SD card."

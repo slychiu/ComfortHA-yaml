@@ -400,7 +400,7 @@ else
   curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_tailscale/stop
   sleep 8
   ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no root@a0d7b954-ssh \
-    "docker run --rm -v /mnt/data/supervisor/addons/data/a0d7b954_tailscale:/tsdata busybox sh -c 'rm -f /tsdata/tailscaled.state && rm -rf /tsdata/state && echo cleared'"
+    "docker run --rm -v /mnt/data/supervisor/apps/data/a0d7b954_tailscale:/tsdata busybox sh -c 'rm -f /tsdata/tailscaled.state && rm -rf /tsdata/state && echo cleared'"
   curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_tailscale/start
   sleep 20
 

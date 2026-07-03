@@ -1,8 +1,20 @@
 #!/bin/bash
-# Dev-cycle reset — re-arms first_boot.sh WITHOUT wiping Tailscale state.
+# Dev-cycle reset ï¿½ re-arms first_boot.sh WITHOUT wiping Tailscale state.
 # Use this for repeated dev/test cycles instead of reset.sh.
 # Preserves tailscaled.state so the cached TLS cert is reused (no Let's Encrypt rate limit hit).
 trap '' HUP
+
+# Refuse to run if a previous reset/provisioning cycle is still in progress.
+# .zero_touch_completed only reappears once first_boot.sh finishes, and this
+# script removes it at the start of every cycle below. There's no "in
+# progress" indicator on the Reset to Default button and the full cycle
+# takes ~3-4 minutes, so clicking it more than once is an easy mistake --
+# without this guard, a second click's `ha core stop` would interrupt the
+# first cycle's first_boot.sh mid-flight instead of being a harmless no-op.
+if [ ! -f /config/.zero_touch_completed ]; then
+  echo "Reset already in progress -- ignoring duplicate trigger."
+  exit 0
+fi
 
 echo "Dev reset: stopping HA..."
 ha core stop
@@ -59,10 +71,10 @@ rm -f www/remote_access_qr_v2.png
 # Clear per-user sidebar preferences
 rm -f .storage/frontend.user_data_*
 
-# Signal first_boot.sh to skip Tailscale state wipe — preserves node identity and TLS cert
+# Signal first_boot.sh to skip Tailscale state wipe ï¿½ preserves node identity and TLS cert
 touch /config/.dev_reset_mode
 
-echo "Starting HA — first_boot.sh will run automatically..."
+echo "Starting HA ï¿½ first_boot.sh will run automatically..."
 ha core start
 
 echo ""

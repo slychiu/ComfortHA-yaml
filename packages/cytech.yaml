@@ -12,7 +12,17 @@ shell_command:
   # actually working for the first time, which is what finally exposed
   # this. The button now explicitly starts the addon itself before
   # touching the trigger, rather than assuming it's already running.
-  dev_reset: "curl -s -X POST -H \"Authorization: Bearer $SUPERVISOR_TOKEN\" http://supervisor/addons/a0d7b954_ssh/start > /dev/null 2>&1; touch /config/.reset_requested"
+  #
+  # A blind start isn't enough on its own though: the addon's own init-ssh
+  # script hard-exits (bashio::exit.nok) if BOTH ssh.password and
+  # ssh.authorized_keys are empty -- exactly the addon's normal locked-down
+  # steady state -- crashing the container before the watcher init_command
+  # ever runs. Found 2026-07-04 after this reproduced at a customer site on
+  # a device that had never had its SSH addon (re)started since a real
+  # lockdown took effect. Set a one-off throwaway password first so the
+  # addon can actually come up; dev_reset.sh clears it again once the
+  # watcher picks up the trigger.
+  dev_reset: "curl -s -H \"Authorization: Bearer $SUPERVISOR_TOKEN\" http://supervisor/addons/a0d7b954_ssh/info | jq --arg pw \"reset-$(date +%s)\" '.data.options | .ssh.password = $pw | {options: .}' > /tmp/ssh_arm_opts.json; curl -s -X POST -H \"Authorization: Bearer $SUPERVISOR_TOKEN\" -H \"Content-Type: application/json\" -d @/tmp/ssh_arm_opts.json http://supervisor/addons/a0d7b954_ssh/options > /dev/null 2>&1; curl -s -X POST -H \"Authorization: Bearer $SUPERVISOR_TOKEN\" http://supervisor/addons/a0d7b954_ssh/start > /dev/null 2>&1; touch /config/.reset_requested"
 
 command_line:
   - sensor:

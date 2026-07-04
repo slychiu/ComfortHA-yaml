@@ -178,20 +178,28 @@ ensure_reset_watcher() {
   # it immediately, even though it no longer represents a fresh click. Caught
   # live 2026-07-03: restarting the SSH addon after an unrelated completed
   # cycle re-triggered an entire new reset. Fixed by only acting on the
-  # trigger if it's under a minute old (well above the 5s poll interval for
-  # a genuine live click, well below how long a stale one can realistically
-  # sit); anything older gets silently discarded instead of fired.
-  WATCHER_CMD="nohup sh -c 'while true; do if [ -n \"\$(find /config/.reset_requested -mmin -1 2>/dev/null)\" ]; then rm -f /config/.reset_requested; bash /config/dev_reset.sh >> /config/dev_reset_watcher.log 2>&1; elif [ -f /config/.reset_requested ]; then rm -f /config/.reset_requested; fi; sleep 5; done' >/config/dev_reset_watcher_boot.log 2>&1 &"
+  # trigger if it's recent (5 min -- above the 5s poll interval for a
+  # genuine live click plus enough headroom for a slow addon start, well
+  # below how long a stale one can realistically sit); anything older gets
+  # silently discarded instead of fired. Was 1 min until 2026-07-04, when a
+  # slow/crash-looping addon start at a customer site meant the trigger
+  # aged past the old 1-minute window before the addon ever came up, and
+  # got silently discarded on the first poll -- see watchdog note below.
+  WATCHER_CMD="nohup sh -c 'while true; do if [ -n \"\$(find /config/.reset_requested -mmin -5 2>/dev/null)\" ]; then rm -f /config/.reset_requested; bash /config/dev_reset.sh >> /config/dev_reset_watcher.log 2>&1; elif [ -f /config/.reset_requested ]; then rm -f /config/.reset_requested; fi; sleep 5; done' >/config/dev_reset_watcher_boot.log 2>&1 &"
   SSH_INFO=$(curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info)
-  ALREADY_CURRENT=$(echo "$SSH_INFO" | jq --arg cmd "$WATCHER_CMD" '.data.options.init_commands // [] | index($cmd) != null')
+  ALREADY_CURRENT=$(echo "$SSH_INFO" | jq --arg cmd "$WATCHER_CMD" '(.data.options.init_commands // [] | index($cmd) != null) and (.data.options.watchdog == true)')
   if [ "$ALREADY_CURRENT" != "true" ]; then
     # Strip out any prior version of the watcher (matched by the stable
     # substring "reset_requested", present in every version) before adding
     # the current one -- a plain add-if-missing check would never replace
     # an outdated watcher already baked into an existing device's SSH addon
     # config, so a fix here would only ever reach brand-new devices.
+    # Also enable Supervisor's own watchdog on this addon: if it ever
+    # crashes for any reason (this one included, or something new),
+    # Supervisor auto-restarts it instead of the reset mechanism silently
+    # staying dead until the next unrelated addon start.
     echo "$SSH_INFO" | jq --arg cmd "$WATCHER_CMD" \
-      '.data.options | .init_commands = ((.init_commands // []) | map(select(contains("reset_requested") | not)) + [$cmd]) | {options: .}' \
+      '.data.options | .init_commands = ((.init_commands // []) | map(select(contains("reset_requested") | not)) + [$cmd]) | .watchdog = true | {options: .}' \
       > /tmp/ssh_watcher_opts.json
     curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
          -d @/tmp/ssh_watcher_opts.json http://supervisor/addons/a0d7b954_ssh/options
@@ -321,6 +329,53 @@ ensure_remote_qr() {
   fi
 }
 
+# Home Assistant Supervisor's own DNS plugin defaults to Cloudflare over
+# DNS-over-TLS (port 853) whenever no explicit "servers" are configured --
+# fine on networks that allow it, but some corporate/guest/hotel-style
+# networks block outbound port 853 specifically (to stop devices bypassing
+# local DNS filtering). When that happens, every outbound HTTPS call from
+# HA Core and its integrations fails outright -- push notifications, update
+# checks, weather, HACS, analytics -- even though the network's own plain
+# DNS works completely fine for every other device on it, phones included.
+# Found 2026-07-04 at a customer site via repeated
+# "dial tcp 1.1.1.1:853: i/o timeout" / "1.0.0.1:853" errors in the
+# hassio_dns plugin's own log, right as Reset to Default separately failed
+# there (see ensure_reset_watcher and the maintenance branch below).
+#
+# Configure explicit plain DNS (port 53, not DoT) instead: the site's own
+# DHCP-provided gateway first (works virtually everywhere, including sites
+# that rely on their own DNS-based filtering), then Cloudflare/Google plain
+# DNS as a fallback if that's ever unreachable. The gateway address is
+# rediscovered fresh every run (not hardcoded) since it differs per site;
+# idempotent, only touches Supervisor's config if it's actually drifted
+# from what the current network says it should be.
+#
+# Also disables Supervisor's own separate "fallback" option. That's a
+# SECOND, independent DNS path (its own internal listener) that's
+# hardcoded to Cloudflare over DoT regardless of what "servers" above is
+# set to -- setting "servers" alone is not enough. Verified live
+# 2026-07-04 by blocking outbound port 853 on a test device: with
+# "servers" set but "fallback" still true, real hostnames resolved fine,
+# but any query that came back empty/negative from the configured servers
+# still silently hung for 15+ seconds on this second hardcoded path before
+# failing. Disabling it entirely closed the gap -- both real and
+# nonexistent hostnames then resolved in well under a second with port 853
+# fully blocked.
+ensure_resilient_dns() {
+  local GATEWAY_DNS DESIRED CURRENT
+  GATEWAY_DNS=$(curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/network/info \
+    | jq -r '.data.interfaces[]? | select(.primary == true) | .ipv4.nameservers[0] // empty' 2>/dev/null)
+  [ -z "$GATEWAY_DNS" ] && return 0
+  DESIRED=$(jq -cn --arg gw "dns://${GATEWAY_DNS}" '[$gw, "dns://1.1.1.1", "dns://8.8.8.8"] | unique')
+  CURRENT=$(curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/dns/info)
+  if [ "$DESIRED" != "$(echo "$CURRENT" | jq -c '.data.servers // [] | unique')" ] \
+      || [ "$(echo "$CURRENT" | jq -r '.data.fallback')" != "false" ]; then
+    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
+      -d "{\"servers\": ${DESIRED}, \"fallback\": false}" http://supervisor/dns/options
+    echo "DNS servers set to plain (port 53) resolution, hardcoded DoT fallback disabled: ${DESIRED}"
+  fi
+}
+
 # 1. Maintenance mode — already provisioned, just run health checks
 if [ -f /config/.zero_touch_completed ]; then
   # A Reset to Default cycle's finish_firstboot.sh runs as a background job
@@ -342,7 +397,22 @@ if [ -f /config/.zero_touch_completed ]; then
     exit 0
   fi
   echo "Already initialized. Running maintenance checks..."
+  ensure_resilient_dns
   if [ -f /config/.ssh/id_rsa ]; then
+    # The addon's own init-ssh script hard-exits (bashio::exit.nok, code 1)
+    # if BOTH ssh.password and ssh.authorized_keys are empty -- which is
+    # exactly the addon's normal locked-down steady state after a completed
+    # reset cycle (finish_firstboot.sh clears authorized_keys as its last
+    # step, and that's the state every real customer device sits in). A
+    # blind start here used to crash the addon before it could even come up,
+    # taking the Reset to Default watcher down with it. Re-inject the same
+    # provisioning key used during zero-touch provisioning (see below) before
+    # starting, same as that path already does.
+    PUB_KEY=$(cat /config/.ssh/id_rsa.pub)
+    curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info \
+      | jq --arg key "$PUB_KEY" '.data.options | .ssh.authorized_keys = [$key] | {options: .}' > /tmp/ssh_maint_options.json
+    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
+         -d @/tmp/ssh_maint_options.json http://supervisor/addons/a0d7b954_ssh/options
     curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/start 2>/dev/null
     sleep 20
     apply_discard_fix
@@ -409,6 +479,8 @@ if [ -f /config/.zero_touch_completed ]; then
   fi
   exit 0
 fi
+
+ensure_resilient_dns
 
 # 2. Smartly grab the MAC address from the physical port
 if [ -f /sys/class/net/end0/address ]; then

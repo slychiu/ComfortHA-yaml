@@ -59,14 +59,14 @@ fi
 rm -f home-assistant.log
 rm -f home-assistant_v2.db
 
-# Clear SSH addon password (defense-in-depth for handoff to a new user).
-# authorized_keys is intentionally left alone -- first_boot.sh re-injects its
-# own per-device key there for the DISCARD fix step regardless.
-echo "Clearing SSH addon password..."
-curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info \
-  | jq '.data.options | .ssh.password = "" | {options: .}' > /tmp/ssh_reset_opts.json
-curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
-     -d @/tmp/ssh_reset_opts.json http://supervisor/addons/a0d7b954_ssh/options
+# SSH addon password is NOT cleared here (as of 2026-07-04): it's a
+# persistent, random, per-device password (see ensure_ssh_admin_access in
+# first_boot.sh), not a rotating one-off, and stays valid across every
+# Reset to Default cycle on this same physical unit -- that's the whole
+# point of it. authorized_keys is also left alone -- first_boot.sh
+# re-injects its own per-device key there for the DISCARD fix step
+# regardless, and the addon no longer gets locked down at the end of a
+# cycle (it stays running, boot: auto).
 
 # Re-arm zero-touch provisioning
 rm -f .zero_touch_completed

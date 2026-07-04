@@ -61,7 +61,13 @@ rm -rf /config/.ssh
 rm -f /config/www/remote_access_qr.png
 rm -f /config/www/remote_access_qr_v2.png
 
-# Clear SSH addon password and keys so addon cannot start even if manually enabled
+# Clear SSH addon password/keys AND the persistent per-device admin password
+# file (see ensure_ssh_admin_access in first_boot.sh) -- this is golden-image
+# prep for cloning, not the customer-facing Reset to Default button, so the
+# master image should ship fully blank. Each unit cloned from it mints its
+# own fresh persistent password on its own first real boot; without removing
+# this file too, every clone would otherwise inherit the master's password.
+rm -f /config/.ssh_admin_password
 curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info \
   | jq '.data.options | .ssh.password = "" | .ssh.authorized_keys = [] | {options: .}' > /tmp/ssh_reset_opts.json
 curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \

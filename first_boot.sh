@@ -154,6 +154,51 @@ ensure_packages_configured() {
   fi
 }
 
+# Ensures the SSH addon has a persistent, per-device admin password and
+# stays up (boot: auto) instead of being started/stopped around every Reset
+# to Default cycle. This removes the entire *class* of bug that came from
+# cycling the addon on and off: v9's QR race, v11's self-kill ordering,
+# v12's stray-trigger-on-restart, v13's concurrency race with the
+# maintenance branch, and v15's crash-on-blind-start were all, in one way
+# or another, about the addon being off except for brief windows around a
+# reset -- an addon that never turns off doesn't have those windows for a
+# bug to live in.
+#
+# The password is random per device, generated once and stored in
+# /config/.ssh_admin_password -- untouched by dev_reset.sh, so it survives
+# every Reset to Default cycle on this same physical unit. NOT a fixed
+# password shared across the fleet (a single leaked credential would then
+# reach every device), and NOT derived from the per-device SSH key (which
+# *does* get regenerated on every reset, so isn't something a person can
+# reliably remember/retrieve access via). reset.sh (golden-image prep, not
+# the customer-facing button) deletes this file so every unit cloned from
+# a golden image mints its own fresh password on its first real boot.
+ensure_ssh_admin_access() {
+  local PW_FILE="/config/.ssh_admin_password"
+  local PASSWORD PUB_KEY SSH_INFO DESIRED
+  if [ ! -s "$PW_FILE" ]; then
+    head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20 > "$PW_FILE"
+    chmod 600 "$PW_FILE"
+    echo "Generated persistent per-device SSH admin password."
+  fi
+  PASSWORD=$(cat "$PW_FILE")
+  PUB_KEY=$(cat /config/.ssh/id_rsa.pub 2>/dev/null)
+  SSH_INFO=$(curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info)
+  DESIRED=$(echo "$SSH_INFO" | jq --arg pw "$PASSWORD" --arg key "$PUB_KEY" \
+    '(.data.options.ssh.password == $pw) and (.data.options.ssh.authorized_keys == [$key]) and (.data.options.watchdog == true) and (.data.boot == "auto")')
+  if [ "$DESIRED" != "true" ]; then
+    echo "$SSH_INFO" | jq --arg pw "$PASSWORD" --arg key "$PUB_KEY" \
+      '.data.options | .ssh.password = $pw | .ssh.authorized_keys = [$key] | .watchdog = true | {options: .}' \
+      > /tmp/ssh_admin_opts.json
+    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
+         -d @/tmp/ssh_admin_opts.json http://supervisor/addons/a0d7b954_ssh/options
+    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
+         -d '{"boot": "auto"}' http://supervisor/addons/a0d7b954_ssh/options
+    echo "SSH addon credentials/boot config updated (persistent password, boot: auto)."
+  fi
+  curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/start > /dev/null 2>&1
+}
+
 # Idempotently ensures the SSH addon's watcher loop is present. This is what
 # makes the Reset to Default button work: shell_command.dev_reset just drops
 # a trigger file (safe to run from Core's own container), and this loop --
@@ -170,40 +215,26 @@ ensure_packages_configured() {
 # (every update does), regardless of how many versions were skipped.
 ensure_reset_watcher() {
   local WATCHER_CMD SSH_INFO ALREADY_CURRENT
-  # The watcher only runs while the SSH addon container is up (it's launched
-  # via that addon's init_commands). If a Reset to Default click queues
-  # .reset_requested right as the addon is stopping (e.g. finish_firstboot.sh's
-  # own lockdown step at the end of a cycle), that trigger sits unconsumed
-  # until the addon is next started -- at which point a naive watcher fires
-  # it immediately, even though it no longer represents a fresh click. Caught
-  # live 2026-07-03: restarting the SSH addon after an unrelated completed
-  # cycle re-triggered an entire new reset. Fixed by only acting on the
-  # trigger if it's recent (5 min -- above the 5s poll interval for a
-  # genuine live click plus enough headroom for a slow addon start, well
-  # below how long a stale one can realistically sit); anything older gets
-  # silently discarded instead of fired. Was 1 min until 2026-07-04, when a
-  # slow/crash-looping addon start at a customer site meant the trigger
-  # aged past the old 1-minute window before the addon ever came up, and
-  # got silently discarded on the first poll -- see watchdog note below.
+  # Now that the addon (see ensure_ssh_admin_access) never turns off around a
+  # reset, a trigger is always picked up within one 5s poll of being
+  # touched -- but the staleness guard stays as cheap insurance against any
+  # other unexpected restart (host reboot, a genuine crash Supervisor's
+  # watchdog restarts from).
   WATCHER_CMD="nohup sh -c 'while true; do if [ -n \"\$(find /config/.reset_requested -mmin -5 2>/dev/null)\" ]; then rm -f /config/.reset_requested; bash /config/dev_reset.sh >> /config/dev_reset_watcher.log 2>&1; elif [ -f /config/.reset_requested ]; then rm -f /config/.reset_requested; fi; sleep 5; done' >/config/dev_reset_watcher_boot.log 2>&1 &"
   SSH_INFO=$(curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info)
-  ALREADY_CURRENT=$(echo "$SSH_INFO" | jq --arg cmd "$WATCHER_CMD" '(.data.options.init_commands // [] | index($cmd) != null) and (.data.options.watchdog == true)')
+  ALREADY_CURRENT=$(echo "$SSH_INFO" | jq --arg cmd "$WATCHER_CMD" '.data.options.init_commands // [] | index($cmd) != null')
   if [ "$ALREADY_CURRENT" != "true" ]; then
     # Strip out any prior version of the watcher (matched by the stable
     # substring "reset_requested", present in every version) before adding
     # the current one -- a plain add-if-missing check would never replace
     # an outdated watcher already baked into an existing device's SSH addon
     # config, so a fix here would only ever reach brand-new devices.
-    # Also enable Supervisor's own watchdog on this addon: if it ever
-    # crashes for any reason (this one included, or something new),
-    # Supervisor auto-restarts it instead of the reset mechanism silently
-    # staying dead until the next unrelated addon start.
     echo "$SSH_INFO" | jq --arg cmd "$WATCHER_CMD" \
-      '.data.options | .init_commands = ((.init_commands // []) | map(select(contains("reset_requested") | not)) + [$cmd]) | .watchdog = true | {options: .}' \
+      '.data.options | .init_commands = ((.init_commands // []) | map(select(contains("reset_requested") | not)) + [$cmd]) | {options: .}' \
       > /tmp/ssh_watcher_opts.json
     curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
          -d @/tmp/ssh_watcher_opts.json http://supervisor/addons/a0d7b954_ssh/options
-    echo "SSH addon watcher init_command added/updated (takes effect next addon start)."
+    echo "SSH addon watcher init_command added/updated."
   else
     echo "SSH addon watcher init_command already up to date."
   fi
@@ -378,20 +409,12 @@ ensure_resilient_dns() {
 
 # 1. Maintenance mode — already provisioned, just run health checks
 if [ -f /config/.zero_touch_completed ]; then
-  # A Reset to Default cycle's finish_firstboot.sh runs as a background job
-  # inside the SSH addon's own container and does its OWN ha core start
-  # partway through (to reload URLs) before finishing its cleanup. That
-  # start triggers HA to boot again, which re-runs first_boot.sh -- and
-  # since .zero_touch_completed already exists by then, THIS maintenance
-  # branch runs concurrently with the still-active finish_firstboot.sh, in
-  # the same container. This branch's own SSH-addon-stop call at the end
-  # (unconditional, for lockdown) would kill finish_firstboot.sh before it
-  # can reach its own cleanup -- caught live 2026-07-03, reproduced
-  # multiple times with no external interference (ruled out by leaving a
-  # cycle completely untouched and still seeing it happen). .reset_cycle_active
-  # is already the correct signal for "a cycle, including finish_firstboot.sh's
-  # tail, may still be in progress" -- defer entirely rather than risk any
-  # of this branch's steps racing it.
+  # .reset_cycle_active still guards against this branch's dashboard/DNS
+  # work running concurrently with an in-progress reset cycle rewriting the
+  # same config files. It's no longer guarding against an addon-stop race
+  # (see ensure_ssh_admin_access -- the addon doesn't stop around resets
+  # anymore, so that race no longer exists), just against two passes
+  # touching the same files at once.
   if [ -f /config/.reset_cycle_active ]; then
     echo "Reset cycle still in progress -- skipping maintenance checks this pass."
     exit 0
@@ -399,22 +422,15 @@ if [ -f /config/.zero_touch_completed ]; then
   echo "Already initialized. Running maintenance checks..."
   ensure_resilient_dns
   if [ -f /config/.ssh/id_rsa ]; then
-    # The addon's own init-ssh script hard-exits (bashio::exit.nok, code 1)
-    # if BOTH ssh.password and ssh.authorized_keys are empty -- which is
-    # exactly the addon's normal locked-down steady state after a completed
-    # reset cycle (finish_firstboot.sh clears authorized_keys as its last
-    # step, and that's the state every real customer device sits in). A
-    # blind start here used to crash the addon before it could even come up,
-    # taking the Reset to Default watcher down with it. Re-inject the same
-    # provisioning key used during zero-touch provisioning (see below) before
-    # starting, same as that path already does.
-    PUB_KEY=$(cat /config/.ssh/id_rsa.pub)
-    curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info \
-      | jq --arg key "$PUB_KEY" '.data.options | .ssh.authorized_keys = [$key] | {options: .}' > /tmp/ssh_maint_options.json
-    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
-         -d @/tmp/ssh_maint_options.json http://supervisor/addons/a0d7b954_ssh/options
-    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/start 2>/dev/null
-    sleep 20
+    ensure_ssh_admin_access
+    # Normally already up well before this point (boot: auto) -- this is
+    # only a real wait the first time ensure_ssh_admin_access has to change
+    # anything (e.g. an existing device's first boot after adopting this).
+    for _ in 1 2 3 4 5 6; do
+      STATE=$(curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info | jq -r '.data.state')
+      [ "$STATE" = "started" ] && break
+      sleep 5
+    done
     apply_discard_fix
     check_and_apply_updates
     ensure_reset_watcher
@@ -474,8 +490,6 @@ if [ -f /config/.zero_touch_completed ]; then
     else
       echo "Tailscale state: ${TS_STATE} (no action needed)"
     fi
-
-    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/stop 2>/dev/null
   fi
   exit 0
 fi
@@ -496,18 +510,16 @@ mkdir -p /config/.ssh
 ssh-keygen -t rsa -b 4096 -f /config/.ssh/id_rsa -N "" -q
 chmod 600 /config/.ssh/id_rsa
 
-# 7. Inject the RAW public key directly into the Add-on's YAML config via API
-PUB_KEY=$(cat /config/.ssh/id_rsa.pub)
-curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info \
-  | jq --arg key "$PUB_KEY" '.data.options | .ssh.authorized_keys = [$key] | {options: .}' > /tmp/ssh_options.json
+# 7. Set up the addon: persistent per-device password + this fresh key,
+# boot: auto, watchdog on -- see ensure_ssh_admin_access.
+ensure_ssh_admin_access
 
-curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" -d @/tmp/ssh_options.json http://supervisor/addons/a0d7b954_ssh/options
-
-# Force the SSH add-on to restart to read the injected key
-curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/restart
-
-# Wait 30 seconds for the add-on to fully reboot
-sleep 30
+# Wait for the addon to actually be up before relying on SSH into it.
+for _ in 1 2 3 4 5 6; do
+  STATE=$(curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info | jq -r '.data.state')
+  [ "$STATE" = "started" ] && break
+  sleep 5
+done
 
 # Apply DISCARD fix now that SSH addon is running
 apply_discard_fix
@@ -642,37 +654,17 @@ PYEOF
 # Start HA — reads the updated core.config
 ha core start
 sleep 30
-# Clear the provisioning SSH key now that Tailscale setup and the DISCARD fix are done.
-# It has no further use and is the last standing passwordless entry point into the box.
-# Must happen BEFORE stopping the SSH addon below: this whole script runs
-# *inside* the SSH addon's own container (see the ssh -i ... root@a0d7b954-ssh
-# dispatch that launches it), so stopping that addon tears down the container
-# this script is running in -- nohup only protects against a closed terminal,
-# not the container itself disappearing. Anything ordered after the stop call
-# was never actually guaranteed to run, and in practice often didn't: this
-# used to be ordered stop-then-cleanup, which silently left old provisioning
-# keys valid forever and .reset_cycle_active stuck (only ever clearing via
-# its 10-minute staleness fallback, never via real completion).
-curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info \
-  | jq '.data.options | .ssh.authorized_keys = [] | {options: .}' > /tmp/ssh_lockdown_opts.json
-curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
-     -d @/tmp/ssh_lockdown_opts.json http://supervisor/addons/a0d7b954_ssh/options
+# The SSH addon stays up permanently now (boot: auto, see
+# ensure_ssh_admin_access in first_boot.sh) -- no more clearing the
+# provisioning key or stopping the addon here. The persistent per-device
+# password and this same key remain valid across every future reset cycle.
 # The whole two-restart reset cycle is genuinely done now -- safe for
 # dev_reset.sh's debounce guard to allow another run. No-op if unset
 # (e.g. production reset.sh path, which never sets this flag).
 rm -f /config/.reset_cycle_active
 echo "=== finish_firstboot complete $(date) ==="
-# Stop SSH addon (lockdown complete). Last line on purpose -- it's safe for
-# this to kill the script's own container now, since everything that
-# actually matters has already happened above.
-curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/stop
 FINISH_EOF
     chmod +x /config/finish_firstboot.sh
-
-    # Disable SSH addon auto-start before launching the finish script
-    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
-      -H "Content-Type: application/json" -d '{"boot": "manual"}' \
-      http://supervisor/addons/a0d7b954_ssh/options
 
     # Launch finish script from WITHIN the SSH addon (separate container — not killed
     # when HA core stops) and return immediately.

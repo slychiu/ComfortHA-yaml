@@ -3,26 +3,17 @@ shell_command:
   cytech_check_update: "nohup bash /config/cytech_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_reject_update: "nohup bash /config/cytech_reject_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_clear_notify: "rm -f /config/.cytech_notify_pending"
-  # The reset watcher only runs while the SSH addon is up (it's launched via
-  # that addon's init_commands), and the addon is normally STOPPED in steady
-  # state (finish_firstboot.sh locks it down as its last step, boot: manual
-  # so it never auto-starts). A real click from a real customer would
-  # otherwise touch .reset_requested with nothing running to ever process
-  # it -- caught live 2026-07-03 right after v11's lockdown fix started
-  # actually working for the first time, which is what finally exposed
-  # this. The button now explicitly starts the addon itself before
-  # touching the trigger, rather than assuming it's already running.
-  #
-  # A blind start isn't enough on its own though: the addon's own init-ssh
-  # script hard-exits (bashio::exit.nok) if BOTH ssh.password and
-  # ssh.authorized_keys are empty -- exactly the addon's normal locked-down
-  # steady state -- crashing the container before the watcher init_command
-  # ever runs. Found 2026-07-04 after this reproduced at a customer site on
-  # a device that had never had its SSH addon (re)started since a real
-  # lockdown took effect. Set a one-off throwaway password first so the
-  # addon can actually come up; dev_reset.sh clears it again once the
-  # watcher picks up the trigger.
-  dev_reset: "curl -s -H \"Authorization: Bearer $SUPERVISOR_TOKEN\" http://supervisor/addons/a0d7b954_ssh/info | jq --arg pw \"reset-$(date +%s)\" '.data.options | .ssh.password = $pw | {options: .}' > /tmp/ssh_arm_opts.json; curl -s -X POST -H \"Authorization: Bearer $SUPERVISOR_TOKEN\" -H \"Content-Type: application/json\" -d @/tmp/ssh_arm_opts.json http://supervisor/addons/a0d7b954_ssh/options > /dev/null 2>&1; curl -s -X POST -H \"Authorization: Bearer $SUPERVISOR_TOKEN\" http://supervisor/addons/a0d7b954_ssh/start > /dev/null 2>&1; touch /config/.reset_requested"
+  # The reset watcher runs as an init_command inside the SSH addon's own
+  # container, which now stays up permanently (see ensure_ssh_admin_access
+  # in first_boot.sh) instead of being started/stopped around each reset --
+  # so the button just needs to drop the trigger file; the watcher is
+  # already there to pick it up within 5 seconds. Historically (through
+  # 2026-07-04) this had to explicitly start the addon and inject a
+  # throwaway credential first, since the addon used to be off in its
+  # normal steady state and its own init-ssh script hard-exits if it has no
+  # credential at all -- both of those problems went away once the addon
+  # stopped turning off in the first place.
+  dev_reset: "touch /config/.reset_requested"
 
 command_line:
   - sensor:

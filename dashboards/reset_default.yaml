@@ -1,0 +1,26 @@
+views:
+- type: sections
+  sections:
+  - type: grid
+    cards:
+    - type: markdown
+      content: '# Reset to Default
+
+
+        This resets **all users, passwords, and paired phones** (mobile app links) and restarts onboarding — exactly like a factory-fresh setup.
+
+
+        Your Comfort alarm configuration, automations, and remote access link are **not** affected.
+
+
+        **This cannot be undone.** Use this to hand the system to a new user, or if account access is lost.'
+    - type: button
+      name: Reset to Default
+      icon: mdi:restore-alert
+      show_name: true
+      show_icon: true
+      tap_action:
+        action: call-service
+        service: shell_command.dev_reset
+        confirmation:
+          text: This will erase all users, passwords, and paired phones, then restart onboarding. This cannot be undone. Continue?

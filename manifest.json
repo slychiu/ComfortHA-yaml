@@ -1,9 +1,9 @@
 {
-  "version": 17,
-  "changelog": "Fixes the one defect found when v16 was live-tested (2026-07-05, cytech-18): ensure_ssh_admin_access() was setting the SSH addon's `watchdog` property NESTED inside `options`, but `watchdog` is a top-level addon property -- so Supervisor silently ignored it and watchdog stayed false the whole time, leaving the auto-restart-on-crash safety net that v16 specified never actually enabled. The addon stayed up anyway (the persistent password prevents the v15 crash-on-blind-start), but the net wasn't there. Now sent at the top level alongside boot, verified to stick (watchdog: false -> true). Also fixes the idempotency check, which was reading .data.options.watchdog (always null) and so pointlessly re-POSTing the addon config on every single boot.",
+  "version": 18,
+  "changelog": "Bakes the cytech-18 device-local work into the repo. (1) Reset-flow audit fixes: maintenance_repair.sh no longer stops the SSH addon (would have broken Reset to Default on the next hostname drift); finish_firstboot.sh traps EXIT to clear .reset_cycle_active if killed (so a crashed finish step can't permanently disable maintenance self-heal); maintenance branch treats .reset_cycle_active as stale after 15 min. (2) Five managed dashboards (Comfort Alarm, Config Files, Remote Access, Reset to Default, System Info) converted from storage to YAML mode -- read-only in the UI to prevent accidental card/YAML deletion; a new ensure_yaml_dashboards() function in first_boot.sh registers them in configuration.yaml and removes the superseded storage registry entries on each device. (3) ensure_reset_dashboard() made a no-op and the finish_firstboot system-dashboard-creation block neutralized (both were recreating storage dashboards that are now YAML). All reset-verified on cytech-18. The landing Overview stays the standard HA Overview (editable); the managed dashboards are separate read-only pages in the sidebar.",
   "warnings": [
-    "HA will restart automatically after this update to load the new shell_command definition.",
-    "SSH access behavior has changed: the Advanced SSH & Web Terminal addon will now stay running permanently instead of being off except during active operations, using a persistent per-device password (visible in /config/.ssh_admin_password) rather than being locked out after every Reset to Default."
+    "HA will restart automatically after this update (first_boot.sh changed). On the next boot, ensure_yaml_dashboards() registers the 5 managed dashboards as read-only YAML and removes their old storage versions -- a second restart may occur if configuration.yaml changes.",
+    "Managed dashboards (Comfort Alarm, Config Files, Remote Access, Reset to Default, System Info) become read-only. Edit /config/dashboards/*.yaml on disk to change them. The standard Overview remains editable for personal cards."
   ],
   "files": [
     "first_boot.sh",
@@ -13,6 +13,11 @@
     "cytech_check_only.sh",
     "packages/cytech.yaml",
     "cytech_update.sh",
-    "welcome_dashboard.json"
+    "welcome_dashboard.json",
+    "dashboards/alarm.yaml",
+    "dashboards/system.yaml",
+    "dashboards/welcome.yaml",
+    "dashboards/reset_default.yaml",
+    "dashboards/battery_levels.yaml"
   ]
 }

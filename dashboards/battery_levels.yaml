@@ -1,0 +1,50 @@
+views:
+- type: sections
+  sections:
+  - type: grid
+    cards:
+    - type: heading
+      heading_style: title
+      heading: Battery/Power
+    - type: vertical-stack
+      cards:
+      - type: vertical-stack
+        cards:
+        - type: button
+          name: Battery Update
+          icon: mdi:battery-sync
+          tap_action:
+            action: call-service
+            service: button.press
+            target:
+              entity_id: button.cytech_comfort_mqtt_battery_update
+        - type: tile
+          entity: sensor.cytech_comfort_mqtt_battery_status
+          name: Battery
+          vertical: false
+          hide_state: false
+          icon: mdi:car-battery
+        - type: tile
+          entity: sensor.cytech_comfort_mqtt_charger_status
+          name: Charger
+          vertical: false
+          hide_state: false
+          icon: mdi:battery-charging
+      - type: entities
+        title: System Voltages
+        entities:
+        - entity: sensor.cytech_comfort_mqtt_battery_main_voltage
+          name: Battery Main Voltage
+        - entity: sensor.cytech_comfort_mqtt_dc_supply_main_voltage
+          name: DC Supply Main Voltage
+  - type: grid
+    cards:
+    - type: heading
+      heading_style: title
+      heading: System Info
+    - type: tile
+      entity: sensor.cytech_comfort_mqtt_comfort_filesystem
+    - type: tile
+      entity: sensor.cytech_comfort_mqtt_comfort_firmware
+    - type: tile
+      entity: binary_sensor.cytech_comfort_mqtt_comfort_connection_state

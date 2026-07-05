@@ -73,8 +73,10 @@ jq --arg ext "https://${FULL_DNS}" \
     && echo "URLs updated: ext=https://${FULL_DNS} int=http://cytech.local:8123"
 ha core start
 sleep 30
-curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
-    http://supervisor/addons/a0d7b954_ssh/stop
+# SSH addon stays up permanently (boot: auto, v16+ always-on design) --
+# do NOT stop it here. A previous version of this template stopped the addon
+# at the end of a repair, which killed the reset watcher and silently broke
+# Reset to Default until the next reboot. Same bug class as v11/v13.
 echo "=== maintenance_repair done $(date) ==="
 REPAIR_EOF
   chmod +x /config/maintenance_repair.sh
@@ -253,6 +255,13 @@ ensure_reset_watcher() {
 # in cytech_update.sh: it's a wholesale overwrite, and anything an installer
 # added on top of the managed cards would otherwise just be gone.
 ensure_reset_dashboard() {
+  # reset_default and system (Config Files) dashboards are now YAML-mode
+  # (read-only, managed as files in /config/dashboards/ + registered in
+  # configuration.yaml's lovelace.dashboards dict). This function's old job
+  # -- registering/creating/refreshing their STORAGE versions -- would
+  # recreate them as storage dashboards on every maintenance boot and cause
+  # duplicates. No-op now; the bodies below are dead but kept for reference.
+  return 0
   local RESULT
   RESULT=$(python3 - << 'PYEOF'
 import json, os
@@ -410,6 +419,80 @@ ensure_resilient_dns() {
   fi
 }
 
+# Idempotently registers the Cytech managed dashboards as YAML-mode (read-only)
+# entries in configuration.yaml's lovelace.dashboards dict, and removes their
+# now-superseded storage registry entries (so a v17->v18 device doesn't end up
+# with both storage and YAML versions = duplicate dashboards). Dashboard content
+# files live in /config/dashboards/ (shipped via manifest files[] or baked into
+# the golden image). Returns 1 if configuration.yaml changed (caller restarts
+# HA to load the new block), 0 otherwise.
+ensure_yaml_dashboards() {
+  local CFG=/config/configuration.yaml CHANGED=0
+  mkdir -p /config/dashboards
+  if ! grep -q '^lovelace:' "$CFG" 2>/dev/null; then
+    cat >> "$CFG" << 'YAMLEOF'
+
+lovelace:
+  # Managed dashboards in YAML mode (read-only in the UI). Landing = standard
+  # HA Overview (editable storage). Edit /config/dashboards/*.yaml to change.
+  dashboards:
+    comfort-alarm:
+      mode: yaml
+      title: Comfort Alarm
+      icon: mdi:alarm-panel
+      show_in_sidebar: true
+      require_admin: false
+      filename: dashboards/alarm.yaml
+    config-files:
+      mode: yaml
+      title: Config Files
+      icon: mdi:cog
+      show_in_sidebar: true
+      require_admin: true
+      filename: dashboards/system.yaml
+    dashboard-welcome:
+      mode: yaml
+      title: Remote Access
+      icon: mdi:home-assistant
+      show_in_sidebar: true
+      require_admin: false
+      filename: dashboards/welcome.yaml
+    reset-default:
+      mode: yaml
+      title: Reset to Default
+      icon: mdi:restore-alert
+      show_in_sidebar: true
+      require_admin: true
+      filename: dashboards/reset_default.yaml
+    battery-levels:
+      mode: yaml
+      title: System Info
+      icon: mdi:account-settings
+      show_in_sidebar: true
+      require_admin: false
+      filename: dashboards/battery_levels.yaml
+YAMLEOF
+    CHANGED=1
+    echo "YAML dashboards registered in configuration.yaml"
+  fi
+  # Remove storage registry entries for dashboards now managed as YAML.
+  if [ -f /config/.storage/lovelace_dashboards ]; then
+    python3 - <<'PYEOF'
+import json
+p = '/config/.storage/lovelace_dashboards'
+d = json.load(open(p))
+remove = {'comfort_alarm', 'system', 'reset_default', 'dashboard_welcome', 'battery_levels'}
+before = len(d['data']['items'])
+d['data']['items'] = [i for i in d['data']['items'] if i.get('id') not in remove]
+after = len(d['data']['items'])
+if after != before:
+    json.dump(d, open(p, 'w'))
+    print(f"lovelace_dashboards registry: {before} -> {after} (removed storage duplicates)")
+PYEOF
+  fi
+  return $CHANGED
+}
+
 # 1. Maintenance mode — already provisioned, just run health checks
 if [ -f /config/.zero_touch_completed ]; then
   # .reset_cycle_active still guards against this branch's dashboard/DNS
@@ -417,13 +500,21 @@ if [ -f /config/.zero_touch_completed ]; then
   # same config files. It's no longer guarding against an addon-stop race
   # (see ensure_ssh_admin_access -- the addon doesn't stop around resets
   # anymore, so that race no longer exists), just against two passes
-  # touching the same files at once.
-  if [ -f /config/.reset_cycle_active ]; then
+  # touching the same files at once. Treated as stale after 15 minutes so a
+  # crashed finish_firstboot (which clears this flag on its last line) can't
+  # permanently disable maintenance self-heal.
+  if [ -n "$(find /config/.reset_cycle_active -mmin -15 2>/dev/null)" ]; then
     echo "Reset cycle still in progress -- skipping maintenance checks this pass."
     exit 0
   fi
   echo "Already initialized. Running maintenance checks..."
   ensure_resilient_dns
+  ensure_yaml_dashboards
+  if [ $? -eq 1 ]; then
+    echo "YAML dashboard config changed — restarting HA to load it."
+    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/restart >/dev/null
+    exit 0
+  fi
   if [ -f /config/.ssh/id_rsa ]; then
     ensure_ssh_admin_access
     # Normally already up well before this point (boot: auto) -- this is
@@ -498,6 +589,7 @@ if [ -f /config/.zero_touch_completed ]; then
 fi
 
 ensure_resilient_dns
+ensure_yaml_dashboards
 
 # 2. Smartly grab the MAC address from the physical port
 if [ -f /sys/class/net/end0/address ]; then
@@ -583,6 +675,11 @@ if [ -n "$ACTUAL_HOSTNAME" ]; then
 exec >> /config/finish_debug.log 2>&1
 echo "=== finish_firstboot starting $(date) ==="
 set -x
+# Clear the reset-cycle flag even if killed mid-run (addon crash, SIGTERM on
+# container stop). Without this, .reset_cycle_active stays set and the
+# maintenance branch defers forever, disabling self-heal. Normal completion
+# also clears it at the end -- idempotent no-op here.
+trap 'rm -f /config/.reset_cycle_active' EXIT
 sleep 5
 DEVICE_ID=$(cat /config/device_id.txt)
 # Read full Tailscale DNSName live — correct regardless of which tailnet is in use
@@ -607,8 +704,10 @@ if ! grep -q "^homeassistant:" /config/configuration.yaml 2>/dev/null; then
 fi
 mkdir -p /config/packages
 
-# Create System dashboard (idempotent)
-python3 - << 'PYEOF'
+# Create System dashboard -- SKIPPED: system (Config Files) is now YAML-mode
+# (dashboards/system.yaml + registered in configuration.yaml). The heredoc
+# below is consumed by ':' so it does nothing; kept for reference.
+: << 'PYEOF'
 import json, os
 
 # 1. Add System dashboard to the dashboards list

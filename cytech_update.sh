@@ -40,6 +40,10 @@ BASE_URL="${CYTECH_MANIFEST_URL%/manifest.json}"
 # content compare (not just "was it in the file list") avoids restarting
 # on every single update when this file happens to be unchanged.
 PACKAGES_CHANGED=0
+# first_boot.sh changes must also trigger a restart -- otherwise the new
+# first_boot.sh sits on disk unexecuted until the next manual reboot, and
+# things like ensure_yaml_dashboards() wouldn't run on Update Now.
+FIRSTBOOT_CHANGED=0
 while IFS= read -r FILE; do
   case "$FILE" in
     .cytech_secrets|device_id.txt|.zero_touch_completed|configuration.yaml|secrets.yaml|"") continue ;;
@@ -50,6 +54,9 @@ while IFS= read -r FILE; do
     case "$FILE" in *.sh) chmod +x "/config/${FILE}.tmp" ;; esac
     if [ "$FILE" = "packages/cytech.yaml" ] && ! cmp -s "/config/${FILE}" "/config/${FILE}.tmp" 2>/dev/null; then
       PACKAGES_CHANGED=1
+    fi
+    if [ "$FILE" = "first_boot.sh" ] && ! cmp -s "/config/${FILE}" "/config/${FILE}.tmp" 2>/dev/null; then
+      FIRSTBOOT_CHANGED=1
     fi
     mv "/config/${FILE}.tmp" "/config/${FILE}"
     echo "$FILE updated"
@@ -104,8 +111,8 @@ apply_dashboard alarm_dashboard.json lovelace.comfort_alarm
 apply_dashboard system_dashboard.json lovelace.system
 apply_dashboard welcome_dashboard.json lovelace.dashboard_welcome
 
-if [ "$LOVELACE_CHANGED" = "1" ] || [ "$PACKAGES_CHANGED" = "1" ]; then
+if [ "$LOVELACE_CHANGED" = "1" ] || [ "$PACKAGES_CHANGED" = "1" ] || [ "$FIRSTBOOT_CHANGED" = "1" ]; then
   curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
     http://supervisor/core/restart
-  echo "HA restarting to apply dashboard/package changes..."
+  echo "HA restarting to apply dashboard/package/first_boot changes..."
 fi

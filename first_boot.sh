@@ -184,17 +184,20 @@ ensure_ssh_admin_access() {
   PASSWORD=$(cat "$PW_FILE")
   PUB_KEY=$(cat /config/.ssh/id_rsa.pub 2>/dev/null)
   SSH_INFO=$(curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info)
+  # watchdog is a TOP-LEVEL addon property, not an option -- nesting it inside
+  # .data.options (a previous version of this function did) silently no-ops and
+  # left watchdog:false. Send it at the top level alongside boot.
   DESIRED=$(echo "$SSH_INFO" | jq --arg pw "$PASSWORD" --arg key "$PUB_KEY" \
-    '(.data.options.ssh.password == $pw) and (.data.options.ssh.authorized_keys == [$key]) and (.data.options.watchdog == true) and (.data.boot == "auto")')
+    '(.data.options.ssh.password == $pw) and (.data.options.ssh.authorized_keys == [$key]) and (.data.watchdog == true) and (.data.boot == "auto")')
   if [ "$DESIRED" != "true" ]; then
     echo "$SSH_INFO" | jq --arg pw "$PASSWORD" --arg key "$PUB_KEY" \
-      '.data.options | .ssh.password = $pw | .ssh.authorized_keys = [$key] | .watchdog = true | {options: .}' \
+      '.data.options | .ssh.password = $pw | .ssh.authorized_keys = [$key] | {options: .}' \
       > /tmp/ssh_admin_opts.json
     curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
          -d @/tmp/ssh_admin_opts.json http://supervisor/addons/a0d7b954_ssh/options
     curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
-         -d '{"boot": "auto"}' http://supervisor/addons/a0d7b954_ssh/options
-    echo "SSH addon credentials/boot config updated (persistent password, boot: auto)."
+         -d '{"boot": "auto", "watchdog": true}' http://supervisor/addons/a0d7b954_ssh/options
+    echo "SSH addon credentials/boot config updated (persistent password, boot: auto, watchdog: on)."
   fi
   curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/start > /dev/null 2>&1
 }

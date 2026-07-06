@@ -419,6 +419,58 @@ ensure_resilient_dns() {
   fi
 }
 
+# Supervisor's own dns_server_failed check can misfire once, right when the
+# POST above (or any other trigger) restarts hassio_dns: the check runs on
+# Supervisor's own schedule and can query the DNS proxy in the few seconds
+# right after restart, before its upstream connections have settled, timing
+# out on a query that would succeed moments later. Because "fallback" is
+# intentionally disabled above, that single transient miss gets surfaced as
+# a persistent "Unsupported system: DNS server issues" banner that does not
+# clear on its own even once the network is fine again -- live-confirmed
+# 2026-07-06, where re-running the exact same check by hand immediately
+# after the restart passed cleanly.
+#
+# Self-heal: only if Supervisor currently has an open dns_server-context
+# issue, re-verify every one of Supervisor's own configured DNS servers
+# actually resolves DNS_CHECK_HOST right now, using the same hostname the
+# real check uses. Only dismiss the stale issue if they all pass. This
+# can never mask a real, ongoing DNS failure -- it only clears the flag
+# once we've freshly confirmed, right now, that DNS is actually fine.
+#
+# Uses `dig` directly (present in the homeassistant container itself) --
+# NOT `docker exec hassio_dns ...`, since this script runs inside the
+# homeassistant container, which has no docker CLI of its own (every other
+# docker exec in this file is tunnelled through the SSH addon over
+# root@a0d7b954-ssh instead). Confirmed live 2026-07-06: a direct `docker
+# exec` here fails with "docker: command not found", and at the very first
+# call site below -- the exact boot this is meant to fix -- the SSH key
+# used for that tunnel doesn't exist yet either, so `dig` in-container is
+# the only option that works at both call sites.
+clear_stale_dns_issue() {
+  local ISSUES DNS_ISSUE_UUIDS UUID SERVERS SERVER RESULT ALL_OK=1
+  ISSUES=$(curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/resolution/info)
+  DNS_ISSUE_UUIDS=$(echo "$ISSUES" | jq -r '.data.issues[]? | select(.context == "dns_server") | .uuid')
+  [ -z "$DNS_ISSUE_UUIDS" ] && return 0
+
+  SERVERS=$(curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/dns/info \
+    | jq -r '((.data.servers // []) + (.data.locals // [])) | unique | .[]' | sed 's#^dns://##')
+  for SERVER in $SERVERS; do
+    RESULT=$(dig +time=3 +tries=1 "@${SERVER}" _checkdns.home-assistant.io A +short 2>/dev/null)
+    if [ -z "$RESULT" ]; then
+      ALL_OK=0
+      break
+    fi
+  done
+
+  if [ "$ALL_OK" = "1" ]; then
+    for UUID in $DNS_ISSUE_UUIDS; do
+      curl -s -X DELETE -H "Authorization: Bearer $SUPERVISOR_TOKEN" "http://supervisor/resolution/issue/${UUID}"
+    done
+    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/resolution/healthcheck >/dev/null
+    echo "Cleared stale dns_server issue(s) after re-verifying DNS resolution succeeds now."
+  fi
+}
+
 # Idempotently registers the Cytech managed dashboards as YAML-mode (read-only)
 # entries in configuration.yaml's lovelace.dashboards dict, and removes their
 # now-superseded storage registry entries (so a v17->v18 device doesn't end up
@@ -509,6 +561,7 @@ if [ -f /config/.zero_touch_completed ]; then
   fi
   echo "Already initialized. Running maintenance checks..."
   ensure_resilient_dns
+  clear_stale_dns_issue
   ensure_yaml_dashboards
   if [ $? -eq 1 ]; then
     echo "YAML dashboard config changed — restarting HA to load it."
@@ -589,6 +642,7 @@ if [ -f /config/.zero_touch_completed ]; then
 fi
 
 ensure_resilient_dns
+clear_stale_dns_issue
 ensure_yaml_dashboards
 
 # 2. Smartly grab the MAC address from the physical port

@@ -1,3 +1,6 @@
+# cytech-19: no functional change here -- bumped solely so cytech_update.sh's
+# PACKAGES_CHANGED check trips and auto-restarts HA Core, which re-runs the
+# updated first_boot.sh (see clear_stale_dns_issue) on already-deployed devices.
 shell_command:
   cytech_check_only: "nohup bash /config/cytech_check_only.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_update: "nohup bash /config/cytech_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"

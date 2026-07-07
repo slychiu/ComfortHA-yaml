@@ -9,6 +9,31 @@ ha core stop
 echo "Performing factory reset � erasing users, auth, mobile devices..."
 cd /config
 
+# 0. Bake the DISCARD-disable udev rule into the host overlay BEFORE this
+# card gets imaged as the golden clone source. first_boot.sh's own
+# apply_discard_fix() only takes effect starting the card's SECOND boot
+# (udev rules load at boot time, so writing the rule mid-boot can't protect
+# that same boot) -- but first_boot.sh does its heaviest writing (config,
+# storage, addon stores) during exactly that unprotected first boot. Root
+# cause of the 2026-07-06 corruption incident: a freshly cloned card got
+# corrupted during that first-boot window despite the fix being "deployed".
+# Writing the rule here, before capture, means every unit cloned from this
+# image has it active from its literal first boot -- no gap. This runs
+# directly (no nested ssh hop) because reset.sh already executes inside the
+# SSH addon container, which has the docker socket needed to reach the host
+# overlay (see project_sdcard_fix memory).
+echo "Baking DISCARD-disable udev rule into host overlay for golden image..."
+printf 'ACTION=="add", KERNEL=="mmcblk0", SUBSYSTEM=="block", ATTR{queue/discard_max_bytes}="0"\n' \
+  > /tmp/99-mmc-nodiscard.rules
+docker run --rm -v /mnt/overlay:/host_overlay -v /tmp:/staging busybox \
+  sh -c 'mkdir -p /host_overlay/etc/udev/rules.d && cp /staging/99-mmc-nodiscard.rules /host_overlay/etc/udev/rules.d/99-mmc-nodiscard.rules'
+rm -f /tmp/99-mmc-nodiscard.rules
+if docker run --rm -v /mnt/overlay:/host_overlay busybox test -f /host_overlay/etc/udev/rules.d/99-mmc-nodiscard.rules; then
+  echo "DISCARD rule confirmed present in host overlay -- safe to capture this image."
+else
+  echo "ERROR: DISCARD rule NOT found in host overlay after write -- DO NOT capture this image until this is fixed."
+fi
+
 # 1. Auth and user accounts
 rm -f .storage/auth
 rm -f .storage/auth_provider.homeassistant

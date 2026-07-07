@@ -26,6 +26,137 @@ apply_discard_fix() {
   echo "DISCARD fix written to host overlay (active on next reboot)."
 }
 
+# Fast write/readback canary -- run ONCE, on a card's first real boot, before
+# provisioning does its own heavy writing. Writes a test file to /config
+# (the data partition, mmcblk0p8 -- the same partition that corrupted in both
+# the Tailscale-state and 2026-07-06 configuration.yaml incidents), forcing a
+# real fsync so an underlying write failure surfaces as a dd error instead of
+# silently succeeding into page cache. Deliberately avoids oflag/iflag=direct:
+# HA Core's container may be running busybox coreutils rather than GNU
+# coreutils, and busybox dd's O_DIRECT flag support is inconsistent enough
+# that relying on it risked false CANARY FAILED results on perfectly good
+# cards. Net effect: this reliably catches dead/failing flash and write
+# errors, but is NOT a capacity-lie detector -- a small 64MB sample can still
+# land inside a counterfeit card's real (smaller) physical region even if the
+# card is lying about total size. That class of defect still needs the full
+# F3/h2testw pass as a separate manual pre-deployment step. Also doesn't test
+# the DISCARD firmware bug itself (needs an actual discard between write and
+# read, which we deliberately never issue on production units).
+run_flash_canary() {
+  local TESTFILE="/config/.cytech_canary_test"
+  local SIZE_MB=64
+  local WRITE_HASH READ_HASH
+
+  echo "Running flash write/readback canary (${SIZE_MB}MB)..."
+  if ! dd if=/dev/urandom of="$TESTFILE" bs=1M count=$SIZE_MB conv=fsync 2>/tmp/canary_write.err; then
+    echo "CANARY FAILED: write itself errored -- card may be dead, full, or defective:"
+    cat /tmp/canary_write.err
+    rm -f "$TESTFILE" /tmp/canary_write.err
+    echo "$(date): write failed" >> /config/.cytech_canary_failures
+    return 1
+  fi
+  WRITE_HASH=$(sha256sum "$TESTFILE" | awk '{print $1}')
+  sync
+  READ_HASH=$(sha256sum "$TESTFILE" | awk '{print $1}')
+  rm -f "$TESTFILE" /tmp/canary_write.err
+
+  if [ -z "$WRITE_HASH" ] || [ "$WRITE_HASH" != "$READ_HASH" ]; then
+    echo "CANARY FAILED: write/readback mismatch (wrote=$WRITE_HASH read=$READ_HASH). This card may be defective -- DO NOT SHIP."
+    echo "$(date): hash mismatch wrote=$WRITE_HASH read=$READ_HASH" >> /config/.cytech_canary_failures
+    return 1
+  fi
+
+  echo "Canary OK: ${SIZE_MB}MB write/readback verified (sha256 $WRITE_HASH)."
+  return 0
+}
+
+# Ongoing integrity self-check -- runs every maintenance-pass boot. Doesn't
+# care about root cause (DISCARD bug, bad NAND, power loss); it just verifies
+# configuration.yaml still parses as YAML and every file HA has ever written
+# under .storage/ still parses as JSON (HA always writes JSON there, whatever
+# the filename). This is the same failure signature both 2026 corruption
+# incidents produced -- catching it here surfaces a dying card as a
+# dashboard/notification alert instead of the first sign being HA's own
+# recovery mode with no usable backup.
+check_config_integrity() {
+  local RESULT STATUS DETAILS
+  RESULT=$(python3 - << 'PYEOF'
+import json, os
+import yaml
+
+problems = []
+
+# HA's configuration.yaml legitimately uses custom tags (!include,
+# !include_dir_named, !secret, etc.) that plain yaml.safe_load() doesn't
+# know how to construct -- confirmed live 2026-07-07: a totally healthy
+# config with `packages: !include_dir_named packages` false-positived as
+# "corrupt" under the naive loader. This tolerant loader treats any `!`-tagged
+# node as its underlying scalar/sequence/mapping instead of erroring, since
+# this check only cares about YAML structure being well-formed (garbled
+# bytes), not about actually resolving HA's include directives.
+class TolerantLoader(yaml.SafeLoader):
+    pass
+
+def _construct_any_tag(loader, tag_suffix, node):
+    if isinstance(node, yaml.ScalarNode):
+        return loader.construct_scalar(node)
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node)
+    if isinstance(node, yaml.MappingNode):
+        return loader.construct_mapping(node)
+    return None
+
+TolerantLoader.add_multi_constructor('!', _construct_any_tag)
+
+cfg = '/config/configuration.yaml'
+if os.path.exists(cfg):
+    try:
+        with open(cfg, 'r', encoding='utf-8') as f:
+            yaml.load(f, Loader=TolerantLoader)
+    except Exception as e:
+        problems.append(f"configuration.yaml: {type(e).__name__}: {e}")
+
+storage_dir = '/config/.storage'
+if os.path.isdir(storage_dir):
+    for name in sorted(os.listdir(storage_dir)):
+        # HA's own storage helper already quarantines files it finds corrupt
+        # by renaming them to <name>.corrupt.<timestamp> and starting fresh --
+        # confirmed live 2026-07-07: a month-old quarantined
+        # http.auth.corrupt.<ts> file false-positived here as NEW corruption.
+        # That's HA's self-healing already having done its job, not a live
+        # problem to alert on.
+        if '.corrupt.' in name:
+            continue
+        path = os.path.join(storage_dir, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, 'rb') as f:
+                json.load(f)
+        except Exception as e:
+            problems.append(f".storage/{name}: {type(e).__name__}: {e}")
+
+if problems:
+    print("CORRUPT")
+    for p in problems[:10]:
+        print(p)
+else:
+    print("OK")
+PYEOF
+)
+  STATUS=$(echo "$RESULT" | head -1)
+  if [ "$STATUS" = "CORRUPT" ]; then
+    DETAILS=$(echo "$RESULT" | tail -n +2 | tr '\n' '; ')
+    echo "INTEGRITY CHECK FAILED: $DETAILS"
+    jq -n --arg ts "$(date +%s)" \
+      --arg msg "Data integrity issue detected on this device's SD card: ${DETAILS} This may indicate SD card failure -- check the device soon." \
+      '{ts: $ts, message: $msg}' > /config/.cytech_integrity_alert
+  else
+    echo "Integrity check OK: configuration.yaml and .storage/* all parse correctly."
+    rm -f /config/.cytech_integrity_alert
+  fi
+}
+
 # Generates a fresh non-ephemeral reusable auth key via OAuth.
 # Suppresses credentials from deployment_debug.log.
 get_auth_key() {
@@ -177,7 +308,7 @@ ensure_packages_configured() {
 # a golden image mints its own fresh password on its first real boot.
 ensure_ssh_admin_access() {
   local PW_FILE="/config/.ssh_admin_password"
-  local PASSWORD PUB_KEY SSH_INFO DESIRED
+  local PASSWORD PUB_KEY AUTH_KEYS_JSON SSH_INFO DESIRED
   if [ ! -s "$PW_FILE" ]; then
     head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20 > "$PW_FILE"
     chmod 600 "$PW_FILE"
@@ -185,15 +316,27 @@ ensure_ssh_admin_access() {
   fi
   PASSWORD=$(cat "$PW_FILE")
   PUB_KEY=$(cat /config/.ssh/id_rsa.pub 2>/dev/null)
+  # authorized_keys carries this device's own generated key (used internally
+  # by first_boot.sh's nested-ssh docker/ha-cli steps) PLUS a second, fixed
+  # operator key (CYTECH_OPERATOR_PUBKEY, from .cytech_secrets) shared across
+  # the whole fleet -- lets the operator's own PC pull backups from / SSH
+  # into any device without needing each device's random per-device password.
+  # Built as a JSON array via jq rather than plain --arg since
+  # authorized_keys is a list, not a single value.
+  if [ -n "${CYTECH_OPERATOR_PUBKEY}" ]; then
+    AUTH_KEYS_JSON=$(jq -cn --arg a "$PUB_KEY" --arg b "$CYTECH_OPERATOR_PUBKEY" '[$a, $b]')
+  else
+    AUTH_KEYS_JSON=$(jq -cn --arg a "$PUB_KEY" '[$a]')
+  fi
   SSH_INFO=$(curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info)
   # watchdog is a TOP-LEVEL addon property, not an option -- nesting it inside
   # .data.options (a previous version of this function did) silently no-ops and
   # left watchdog:false. Send it at the top level alongside boot.
-  DESIRED=$(echo "$SSH_INFO" | jq --arg pw "$PASSWORD" --arg key "$PUB_KEY" \
-    '(.data.options.ssh.password == $pw) and (.data.options.ssh.authorized_keys == [$key]) and (.data.watchdog == true) and (.data.boot == "auto")')
+  DESIRED=$(echo "$SSH_INFO" | jq --arg pw "$PASSWORD" --argjson keys "$AUTH_KEYS_JSON" \
+    '(.data.options.ssh.password == $pw) and (.data.options.ssh.authorized_keys == $keys) and (.data.watchdog == true) and (.data.boot == "auto")')
   if [ "$DESIRED" != "true" ]; then
-    echo "$SSH_INFO" | jq --arg pw "$PASSWORD" --arg key "$PUB_KEY" \
-      '.data.options | .ssh.password = $pw | .ssh.authorized_keys = [$key] | {options: .}' \
+    echo "$SSH_INFO" | jq --arg pw "$PASSWORD" --argjson keys "$AUTH_KEYS_JSON" \
+      '.data.options | .ssh.password = $pw | .ssh.authorized_keys = $keys | {options: .}' \
       > /tmp/ssh_admin_opts.json
     curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
          -d @/tmp/ssh_admin_opts.json http://supervisor/addons/a0d7b954_ssh/options
@@ -419,58 +562,6 @@ ensure_resilient_dns() {
   fi
 }
 
-# Supervisor's own dns_server_failed check can misfire once, right when the
-# POST above (or any other trigger) restarts hassio_dns: the check runs on
-# Supervisor's own schedule and can query the DNS proxy in the few seconds
-# right after restart, before its upstream connections have settled, timing
-# out on a query that would succeed moments later. Because "fallback" is
-# intentionally disabled above, that single transient miss gets surfaced as
-# a persistent "Unsupported system: DNS server issues" banner that does not
-# clear on its own even once the network is fine again -- live-confirmed
-# 2026-07-06, where re-running the exact same check by hand immediately
-# after the restart passed cleanly.
-#
-# Self-heal: only if Supervisor currently has an open dns_server-context
-# issue, re-verify every one of Supervisor's own configured DNS servers
-# actually resolves DNS_CHECK_HOST right now, using the same hostname the
-# real check uses. Only dismiss the stale issue if they all pass. This
-# can never mask a real, ongoing DNS failure -- it only clears the flag
-# once we've freshly confirmed, right now, that DNS is actually fine.
-#
-# Uses `dig` directly (present in the homeassistant container itself) --
-# NOT `docker exec hassio_dns ...`, since this script runs inside the
-# homeassistant container, which has no docker CLI of its own (every other
-# docker exec in this file is tunnelled through the SSH addon over
-# root@a0d7b954-ssh instead). Confirmed live 2026-07-06: a direct `docker
-# exec` here fails with "docker: command not found", and at the very first
-# call site below -- the exact boot this is meant to fix -- the SSH key
-# used for that tunnel doesn't exist yet either, so `dig` in-container is
-# the only option that works at both call sites.
-clear_stale_dns_issue() {
-  local ISSUES DNS_ISSUE_UUIDS UUID SERVERS SERVER RESULT ALL_OK=1
-  ISSUES=$(curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/resolution/info)
-  DNS_ISSUE_UUIDS=$(echo "$ISSUES" | jq -r '.data.issues[]? | select(.context == "dns_server") | .uuid')
-  [ -z "$DNS_ISSUE_UUIDS" ] && return 0
-
-  SERVERS=$(curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/dns/info \
-    | jq -r '((.data.servers // []) + (.data.locals // [])) | unique | .[]' | sed 's#^dns://##')
-  for SERVER in $SERVERS; do
-    RESULT=$(dig +time=3 +tries=1 "@${SERVER}" _checkdns.home-assistant.io A +short 2>/dev/null)
-    if [ -z "$RESULT" ]; then
-      ALL_OK=0
-      break
-    fi
-  done
-
-  if [ "$ALL_OK" = "1" ]; then
-    for UUID in $DNS_ISSUE_UUIDS; do
-      curl -s -X DELETE -H "Authorization: Bearer $SUPERVISOR_TOKEN" "http://supervisor/resolution/issue/${UUID}"
-    done
-    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/resolution/healthcheck >/dev/null
-    echo "Cleared stale dns_server issue(s) after re-verifying DNS resolution succeeds now."
-  fi
-}
-
 # Idempotently registers the Cytech managed dashboards as YAML-mode (read-only)
 # entries in configuration.yaml's lovelace.dashboards dict, and removes their
 # now-superseded storage registry entries (so a v17->v18 device doesn't end up
@@ -560,8 +651,8 @@ if [ -f /config/.zero_touch_completed ]; then
     exit 0
   fi
   echo "Already initialized. Running maintenance checks..."
+  check_config_integrity
   ensure_resilient_dns
-  clear_stale_dns_issue
   ensure_yaml_dashboards
   if [ $? -eq 1 ]; then
     echo "YAML dashboard config changed — restarting HA to load it."
@@ -641,8 +732,14 @@ if [ -f /config/.zero_touch_completed ]; then
   exit 0
 fi
 
+# Fresh device -- run the flash canary before anything else touches disk.
+# A card that fails this shouldn't be provisioned or shipped at all.
+if ! run_flash_canary; then
+  echo "ABORTING PROVISIONING: flash canary failed. This card should not be used for a customer device."
+  exit 1
+fi
+
 ensure_resilient_dns
-clear_stale_dns_issue
 ensure_yaml_dashboards
 
 # 2. Smartly grab the MAC address from the physical port

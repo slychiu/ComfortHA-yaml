@@ -26,6 +26,30 @@ apply_discard_fix() {
   echo "DISCARD fix written to host overlay (active on next reboot)."
 }
 
+# Enables USB host mode on the CM4's native USB2-OTG port. The golden image
+# ships config.txt with otg_mode=1 and no dwc2 host overlay -- the port never
+# powers on and no device (keyboard, UCM serial adapter, SD reader) is ever
+# detected, confirmed live on two units 2026-07-09. Idempotent: skips if the
+# overlay is already present. Same pattern as apply_discard_fix -- writes to
+# the boot partition via a privileged container through the SSH addon (Core's
+# own container has no docker.sock); takes effect on next reboot, doesn't
+# force one, same as the DISCARD fix.
+apply_usb_host_mode_fix() {
+  ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
+    "docker run --rm --privileged -v /dev:/dev alpine sh -c '
+      mkdir -p /mnt/boot && mount /dev/mmcblk0p1 /mnt/boot
+      if grep -q \"^dtoverlay=dwc2,dr_mode=host\" /mnt/boot/config.txt; then
+        umount /mnt/boot
+        exit 0
+      fi
+      cp /mnt/boot/config.txt /mnt/boot/config.txt.preusbfix.bak
+      sed -i \"s/^otg_mode=1/#otg_mode=1/\" /mnt/boot/config.txt
+      sed -i \"/^#otg_mode=1/a dtoverlay=dwc2,dr_mode=host\" /mnt/boot/config.txt
+      umount /mnt/boot
+    '" 2>/dev/null
+  echo "USB host-mode overlay ensured (active on next reboot)."
+}
+
 # Fast write/readback canary -- run ONCE, on a card's first real boot, before
 # provisioning does its own heavy writing. Writes a test file to /config
 # (the data partition, mmcblk0p8 -- the same partition that corrupted in both
@@ -670,6 +694,7 @@ if [ -f /config/.zero_touch_completed ]; then
       sleep 5
     done
     apply_discard_fix
+    apply_usb_host_mode_fix
     check_and_apply_updates
     ensure_reset_watcher
     ensure_reset_dashboard
@@ -769,6 +794,7 @@ done
 
 # Apply DISCARD fix now that SSH addon is running
 apply_discard_fix
+apply_usb_host_mode_fix
 
 # 8. Tailscale — dev mode reuses existing state; production wipes and re-registers
 if [ -f /config/.dev_reset_mode ]; then

@@ -1,3 +1,8 @@
+# v21: comment-only bump so cytech_update.sh's content-compare sees this file
+# as changed and triggers the HA Core restart that runs first_boot.sh's
+# maintenance branch (where apply_usb_host_mode_fix now lives) -- otherwise
+# a first_boot.sh-only change downloads silently and sits inert until some
+# unrelated restart happens (same gotcha v19 hit, see reference_comfortha_repo).
 shell_command:
   cytech_check_only: "nohup bash /config/cytech_check_only.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_update: "nohup bash /config/cytech_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"

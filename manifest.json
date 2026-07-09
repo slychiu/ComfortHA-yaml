@@ -2,7 +2,8 @@
   "version": 21,
   "changelog": "Fixes USB host mode on the CM4's native USB2-OTG port. The golden image has always shipped config.txt with otg_mode=1 and no dwc2 host overlay -- the port never powered on and no device (UCM serial adapter, keyboard, SD reader) was ever detected, root-caused and confirmed live on two units 2026-07-09 (one of which turned out to have an unrelated, separate hardware defect -- a missing D5 diode -- so this config fix alone won't restore USB on every affected unit, but it is a real and necessary fix for the software/config side). apply_usb_host_mode_fix() patches config.txt via the same privileged-container-through-the-SSH-addon technique as the DISCARD fix, is idempotent, and takes effect on the device's next reboot -- it does not force one.",
   "warnings": [
-    "USB will not start working until the device's next reboot -- this update alone does not power-cycle it.",
+    "HA will restart automatically after this update (packages/cytech.yaml changed).",
+    "USB will not start working until the device's next full reboot -- this update's own HA restart does not power-cycle the board, so it does not apply the fix by itself.",
     "If a device's USB port still doesn't work after its next reboot post-update, suspect a hardware fault (e.g. a missing/blown VBUS component) rather than this fix -- confirmed on at least one unit in the field."
   ],
   "files": [

@@ -332,7 +332,7 @@ ensure_packages_configured() {
 # a golden image mints its own fresh password on its first real boot.
 ensure_ssh_admin_access() {
   local PW_FILE="/config/.ssh_admin_password"
-  local PASSWORD PUB_KEY AUTH_KEYS_JSON SSH_INFO DESIRED
+  local PASSWORD PUB_KEY AUTH_KEYS_JSON SSH_INFO DESIRED SUPPORT_ACTIVE
   if [ ! -s "$PW_FILE" ]; then
     head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20 > "$PW_FILE"
     chmod 600 "$PW_FILE"
@@ -341,14 +341,25 @@ ensure_ssh_admin_access() {
   PASSWORD=$(cat "$PW_FILE")
   PUB_KEY=$(cat /config/.ssh/id_rsa.pub 2>/dev/null)
   # authorized_keys carries this device's own generated key (used internally
-  # by first_boot.sh's nested-ssh docker/ha-cli steps) PLUS a second, fixed
-  # operator key (CYTECH_OPERATOR_PUBKEY, from .cytech_secrets) shared across
-  # the whole fleet -- lets the operator's own PC pull backups from / SSH
-  # into any device without needing each device's random per-device password.
+  # by first_boot.sh's nested-ssh docker/ha-cli steps) PLUS, only while a
+  # customer-granted Remote Support Access window is active, a second, fixed
+  # operator key (operator_pubkey.txt, shared across the whole fleet) that
+  # lets the operator SSH in without needing the device's own random
+  # password. /config/.remote_support_expires_at (a unix timestamp) is the
+  # single source of truth for whether that window is active -- written by
+  # enable_remote_support.sh, removed by disable_remote_support.sh. This
+  # function runs on every HA Core start, not just full reboots, so it MUST
+  # check this file rather than unconditionally granting/revoking -- otherwise
+  # an unrelated Core restart mid-window would silently clobber (or resurrect)
+  # the operator key regardless of the customer's toggle state.
   # Built as a JSON array via jq rather than plain --arg since
   # authorized_keys is a list, not a single value.
-  if [ -n "${CYTECH_OPERATOR_PUBKEY}" ]; then
-    AUTH_KEYS_JSON=$(jq -cn --arg a "$PUB_KEY" --arg b "$CYTECH_OPERATOR_PUBKEY" '[$a, $b]')
+  SUPPORT_ACTIVE=false
+  if [ -s /config/.remote_support_expires_at ] && [ "$(cat /config/.remote_support_expires_at)" -gt "$(date +%s)" ] 2>/dev/null; then
+    SUPPORT_ACTIVE=true
+  fi
+  if [ "$SUPPORT_ACTIVE" = true ] && [ -s /config/operator_pubkey.txt ]; then
+    AUTH_KEYS_JSON=$(jq -cn --arg a "$PUB_KEY" --arg b "$(cat /config/operator_pubkey.txt)" '[$a, $b]')
   else
     AUTH_KEYS_JSON=$(jq -cn --arg a "$PUB_KEY" '[$a]')
   fi
@@ -369,6 +380,27 @@ ensure_ssh_admin_access() {
     echo "SSH addon credentials/boot config updated (persistent password, boot: auto, watchdog: on)."
   fi
   curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/start > /dev/null 2>&1
+  # The options POST above only regenerates /etc/ssh/authorized_keys inside
+  # the addon's OWN container the next time that container itself starts --
+  # confirmed live that an options change does NOT propagate to an
+  # already-running addon's on-disk file (no config-watcher process exists
+  # in that container; it's a fixed s6 service tree). Since HA Core
+  # restarting does not restart the separate SSH addon container, relying
+  # only on the options POST would mean a stale Remote Support Access
+  # window (operator key still authorized past its expiry) could persist
+  # indefinitely on an addon that never itself restarts. So if the addon was
+  # ALREADY running at entry, also directly overwrite the live file via the
+  # same nested-ssh technique used elsewhere in this script -- OpenSSH
+  # re-reads AuthorizedKeysFile per new connection attempt (no caching), so
+  # this takes effect immediately with no restart and no disruption to any
+  # already-open session. Skipped on a true cold start (addon not running
+  # yet): the /start call above already makes the container's own init
+  # generate this file correctly from the options just POSTed, and
+  # attempting to SSH into a container that isn't up yet would just fail.
+  if [ "$(echo "$SSH_INFO" | jq -r '.data.state')" = "started" ]; then
+    ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
+      "echo '$AUTH_KEYS_JSON' | jq -r '.[]' > /etc/ssh/authorized_keys"
+  fi
 }
 
 # Idempotently ensures the SSH addon's watcher loop is present. This is what

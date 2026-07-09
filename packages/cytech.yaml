@@ -1,8 +1,6 @@
-# v21: comment-only bump so cytech_update.sh's content-compare sees this file
-# as changed and triggers the HA Core restart that runs first_boot.sh's
-# maintenance branch (where apply_usb_host_mode_fix now lives) -- otherwise
-# a first_boot.sh-only change downloads silently and sits inert until some
-# unrelated restart happens (same gotcha v19 hit, see reference_comfortha_repo).
+# v22: adds the Remote Support Access toggle (input_boolean/timer/automations
+# below) and its two shell_command entries -- see enable_remote_support.sh /
+# disable_remote_support.sh and ensure_ssh_admin_access() in first_boot.sh.
 shell_command:
   cytech_check_only: "nohup bash /config/cytech_check_only.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_update: "nohup bash /config/cytech_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"
@@ -19,6 +17,18 @@ shell_command:
   # credential at all -- both of those problems went away once the addon
   # stopped turning off in the first place.
   dev_reset: "touch /config/.reset_requested"
+  enable_remote_support: "nohup bash /config/enable_remote_support.sh </dev/null >> /config/cytech_update.log 2>&1 &"
+  disable_remote_support: "nohup bash /config/disable_remote_support.sh </dev/null >> /config/cytech_update.log 2>&1 &"
+
+input_boolean:
+  remote_support_access:
+    name: "Remote Support Access"
+    icon: mdi:account-key
+
+timer:
+  remote_support_access:
+    name: "Remote Support Access"
+    duration: "01:00:00"
 
 command_line:
   - sensor:
@@ -115,3 +125,42 @@ automation:
           message: "{{ state_attr('sensor.cytech_notify_pending', 'message') }}"
           notification_id: cytech_config_update
       - service: shell_command.cytech_clear_notify
+
+  - id: cytech_remote_support_enabled
+    alias: "Cytech: Remote support access enabled"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: input_boolean.remote_support_access
+        to: "on"
+    action:
+      - service: shell_command.enable_remote_support
+      - service: timer.start
+        target:
+          entity_id: timer.remote_support_access
+
+  - id: cytech_remote_support_disabled
+    alias: "Cytech: Remote support access disabled"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: input_boolean.remote_support_access
+        to: "off"
+    action:
+      - service: shell_command.disable_remote_support
+      - service: timer.cancel
+        target:
+          entity_id: timer.remote_support_access
+
+  - id: cytech_remote_support_timer_expired
+    alias: "Cytech: Remote support access timer expired"
+    mode: single
+    trigger:
+      - platform: event
+        event_type: timer.finished
+        event_data:
+          entity_id: timer.remote_support_access
+    action:
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.remote_support_access

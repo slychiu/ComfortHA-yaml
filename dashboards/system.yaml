@@ -44,3 +44,26 @@ views:
           tap_action:
             action: call-service
             service: shell_command.cytech_reject_update
+  - type: grid
+    cards:
+    - type: markdown
+      content: |-
+        ## Remote Support Access
+
+        Turning this on lets Cytech support connect to this system remotely
+        for troubleshooting. It turns itself back off automatically after
+        **1 hour** if you don't turn it off first.
+
+        Contact support@cytech.biz
+    - type: entities
+      entities:
+      - entity: input_boolean.remote_support_access
+        name: Remote Support Access
+    - type: markdown
+      content: >-
+        {% if is_state('input_boolean.remote_support_access', 'on') %}
+        Active until
+        {{ as_timestamp(state_attr('timer.remote_support_access', 'finishes_at')) | timestamp_custom('%H:%M') }}.
+        {% else %}
+        Currently off.
+        {% endif %}

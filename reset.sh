@@ -93,6 +93,11 @@ rm -f /config/www/remote_access_qr_v2.png
 # own fresh persistent password on its own first real boot; without removing
 # this file too, every clone would otherwise inherit the master's password.
 rm -f /config/.ssh_admin_password
+# Also clear any live Remote Support Access window (see enable_remote_support.sh)
+# -- a golden-image master with an active/stale window would otherwise hand
+# every clone a pre-authorized operator key until whatever expiry timestamp
+# happened to be on the master at capture time.
+rm -f /config/.remote_support_expires_at
 curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info \
   | jq '.data.options | .ssh.password = "" | .ssh.authorized_keys = [] | {options: .}' > /tmp/ssh_reset_opts.json
 curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \

@@ -1,10 +1,10 @@
 {
-  "version": 21,
-  "changelog": "Fixes USB host mode on the CM4's native USB2-OTG port. The golden image has always shipped config.txt with otg_mode=1 and no dwc2 host overlay -- the port never powered on and no device (UCM serial adapter, keyboard, SD reader) was ever detected, root-caused and confirmed live on two units 2026-07-09 (one of which turned out to have an unrelated, separate hardware defect -- a missing D5 diode -- so this config fix alone won't restore USB on every affected unit, but it is a real and necessary fix for the software/config side). apply_usb_host_mode_fix() patches config.txt via the same privileged-container-through-the-SSH-addon technique as the DISCARD fix, is idempotent, and takes effect on the device's next reboot -- it does not force one.",
+  "version": 22,
+  "changelog": "Adds a customer-controlled 'Remote Support Access' toggle (Config Files dashboard) that lets Cytech support SSH into the device for troubleshooting. Turning it on adds a fixed, fleet-wide operator SSH key to the SSH addon for 1 hour, then automatically revokes it -- no reboot required, takes effect within seconds either way. The device's own existing per-device random SSH password is unchanged and unaffected by this toggle. Also fixes a related bug found while building this: updating the SSH addon's authorized_keys via the Supervisor API only regenerates its on-disk file the next time that addon container itself restarts -- it silently does NOT take effect on an already-running addon. ensure_ssh_admin_access() (and the new enable/disable scripts) now also write the live file directly so changes apply immediately, including correctly re-enforcing the current Remote Support Access state across an ordinary HA Core restart mid-window.",
   "warnings": [
     "HA will restart automatically after this update (packages/cytech.yaml changed).",
-    "USB will not start working until the device's next full reboot -- this update's own HA restart does not power-cycle the board, so it does not apply the fix by itself.",
-    "If a device's USB port still doesn't work after its next reboot post-update, suspect a hardware fault (e.g. a missing/blown VBUS component) rather than this fix -- confirmed on at least one unit in the field."
+    "Remote Support Access requires Cytech to hold the matching operator private key -- the toggle alone does nothing useful without that key on the support side.",
+    "The operator key is the same across every device in the fleet; if it's ever compromised, it should be rotated (new operator_pubkey.txt + a version bump) rather than relied on indefinitely."
   ],
   "files": [
     "first_boot.sh",
@@ -19,6 +19,9 @@
     "dashboards/system.yaml",
     "dashboards/welcome.yaml",
     "dashboards/reset_default.yaml",
-    "dashboards/battery_levels.yaml"
+    "dashboards/battery_levels.yaml",
+    "operator_pubkey.txt",
+    "enable_remote_support.sh",
+    "disable_remote_support.sh"
   ]
 }

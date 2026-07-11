@@ -1,11 +1,7 @@
 {
-  "version": 22,
-  "changelog": "Adds a customer-controlled 'Remote Support Access' toggle (Config Files dashboard) that lets Cytech support SSH into the device for troubleshooting. Turning it on adds a fixed, fleet-wide operator SSH key to the SSH addon for 1 hour, then automatically revokes it -- no reboot required, takes effect within seconds either way. The device's own existing per-device random SSH password is unchanged and unaffected by this toggle. Also fixes a related bug found while building this: updating the SSH addon's authorized_keys via the Supervisor API only regenerates its on-disk file the next time that addon container itself restarts -- it silently does NOT take effect on an already-running addon. ensure_ssh_admin_access() (and the new enable/disable scripts) now also write the live file directly so changes apply immediately, including correctly re-enforcing the current Remote Support Access state across an ordinary HA Core restart mid-window.",
-  "warnings": [
-    "HA will restart automatically after this update (packages/cytech.yaml changed).",
-    "Remote Support Access requires Cytech to hold the matching operator private key -- the toggle alone does nothing useful without that key on the support side.",
-    "The operator key is the same across every device in the fleet; if it's ever compromised, it should be rotated (new operator_pubkey.txt + a version bump) rather than relied on indefinitely."
-  ],
+  "version": 23,
+  "changelog": "Comfort Alarm dashboard: active-zone highlight color changed from yellow to red. Yellow text/icons on the 'Zones' card had poor contrast against light backgrounds in non-dark mode (both desktop and mobile), making it hard to see which zone was open/active. No functional changes.",
+  "warnings": [],
   "files": [
     "first_boot.sh",
     "reset.sh",

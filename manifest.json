@@ -1,6 +1,6 @@
 {
   "version": 23,
-  "changelog": "Comfort Alarm dashboard: active-zone highlight color changed from yellow to red. Yellow text/icons on the 'Zones' card had poor contrast against light backgrounds in non-dark mode (both desktop and mobile), making it hard to see which zone was open/active. No functional changes.",
+  "changelog": "Comfort Alarm and Comfort Entities dashboards: active-zone highlight color changed from yellow to red. Yellow text/icons on the 'Zones' card had poor contrast against light backgrounds in non-dark mode (both desktop and mobile), making it hard to see which zone was open/active. No functional changes.",
   "warnings": [],
   "files": [
     "first_boot.sh",
@@ -11,6 +11,7 @@
     "packages/cytech.yaml",
     "cytech_update.sh",
     "welcome_dashboard.json",
+    "zones_dashboard.json",
     "dashboards/alarm.yaml",
     "dashboards/system.yaml",
     "dashboards/welcome.yaml",

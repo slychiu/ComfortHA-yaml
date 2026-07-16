@@ -828,11 +828,35 @@ done
 apply_discard_fix
 apply_usb_host_mode_fix
 
-# 8. Tailscale — dev mode reuses existing state; production wipes and re-registers
-if [ -f /config/.dev_reset_mode ]; then
-  rm -f /config/.dev_reset_mode
-  echo "Dev reset mode: reusing existing Tailscale identity (TLS cert preserved)."
-  # Ensure addon is running (dev_reset.sh does not stop it)
+# 8. Tailscale — dev mode / an already-registered identity reuses state; only
+# a genuinely fresh device (no existing registration) wipes and re-registers.
+#
+# The second condition (an existing Running identity found with no
+# .dev_reset_mode flag) covers a provisioning run that gets interrupted by an
+# HA Core restart AFTER Tailscale successfully registered but BEFORE
+# .zero_touch_completed was written -- e.g. an "Update Now" config update
+# landing mid-provisioning fires `core/restart` in cytech_update.sh, which
+# kills this script and re-triggers it from scratch on the next start. Without
+# this check the retried run has no memory of the identity the interrupted
+# run already obtained, and blindly wipes+re-registers, burning a Tailscale
+# node + Let's Encrypt cert and orphaning the QR/link already shown to the
+# user. Root-caused 2026-07-16 on a unit that churned cytech-34 -> cytech-36
+# this way. A genuinely fresh clone from the golden image has no Running
+# Tailscale state at this point (reset.sh wipes it at capture time), so this
+# doesn't affect normal first-ever-boot provisioning.
+EXISTING_FULL_DNS=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no root@a0d7b954-ssh \
+  "docker exec addon_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null" \
+  | jq -r 'select(.BackendState=="Running") | .Self.DNSName // empty' | sed 's/\.$//')
+
+if [ -f /config/.dev_reset_mode ] || [ -n "$EXISTING_FULL_DNS" ]; then
+  if [ -f /config/.dev_reset_mode ]; then
+    rm -f /config/.dev_reset_mode
+    echo "Dev reset mode: reusing existing Tailscale identity (TLS cert preserved)."
+  else
+    echo "Found an already-registered Tailscale identity (${EXISTING_FULL_DNS}) and no dev-reset flag — reusing it instead of wiping (likely an interrupted prior provisioning run)."
+  fi
+  # Ensure addon is running (dev_reset.sh does not stop it; an interrupted
+  # run may have left it in any state)
   curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_tailscale/start 2>/dev/null || true
   sleep 15
   ACTUAL_FULL_DNS=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no root@a0d7b954-ssh \
@@ -840,7 +864,8 @@ if [ -f /config/.dev_reset_mode ]; then
     | jq -r '.Self.DNSName // empty' | sed 's/\.$//')
   ACTUAL_HOSTNAME=$(echo "$ACTUAL_FULL_DNS" | cut -d. -f1)
 else
-  # Production path: wipe state so each cloned SD card gets a unique node identity.
+  # Production path: no existing identity to reuse — wipe state so each
+  # cloned SD card gets a unique node identity.
   echo "Clearing Tailscale state for fresh node identity..."
   curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_tailscale/stop
   sleep 8

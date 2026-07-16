@@ -1,6 +1,6 @@
 {
-  "version": 23,
-  "changelog": "Comfort Alarm and Comfort Entities dashboards: active-zone highlight color changed from yellow to red. Yellow text/icons on the 'Zones' card had poor contrast against light backgrounds in non-dark mode (both desktop and mobile), making it hard to see which zone was open/active. No functional changes.",
+  "version": 24,
+  "changelog": "first_boot.sh: fixed a bug where a provisioning run interrupted mid-way (e.g. by a config update landing before setup finished) would wipe and re-register Tailscale from scratch on retry, losing the remote-access identity/QR that had already been generated. It now reuses an already-registered Tailscale identity if one exists, instead of always wiping. Fresh devices are unaffected.",
   "warnings": [],
   "files": [
     "first_boot.sh",

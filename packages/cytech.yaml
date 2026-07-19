@@ -1,6 +1,9 @@
 # v22: adds the Remote Support Access toggle (input_boolean/timer/automations
 # below) and its two shell_command entries -- see enable_remote_support.sh /
 # disable_remote_support.sh and ensure_ssh_admin_access() in first_boot.sh.
+# v25: comment-only bump so cytech_update.sh's auto-restart trigger fires on
+# already-deployed devices -- the actual fix this release ships lives only in
+# first_boot.sh's apply_usb_host_mode_fix() (see that function for detail).
 shell_command:
   cytech_check_only: "nohup bash /config/cytech_check_only.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_update: "nohup bash /config/cytech_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"

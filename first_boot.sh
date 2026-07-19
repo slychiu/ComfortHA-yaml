@@ -30,22 +30,28 @@ apply_discard_fix() {
 # ships config.txt with otg_mode=1 and no dwc2 host overlay -- the port never
 # powers on and no device (keyboard, UCM serial adapter, SD reader) is ever
 # detected, confirmed live on two units 2026-07-09. Idempotent: skips if the
-# overlay is already present. Same pattern as apply_discard_fix -- writes to
-# the boot partition via a privileged container through the SSH addon (Core's
-# own container has no docker.sock); takes effect on next reboot, doesn't
-# force one, same as the DISCARD fix.
+# overlay is already present.
+#
+# FIX 2026-07-19: originally raw-mounted /dev/mmcblk0p1 itself inside a
+# privileged container on every single boot (just to run the idempotency
+# check), racing the host's own already-active mount of that same device --
+# root-caused via live bisection as the source of a "Can't open blockdev"
+# kernel message appearing on every boot once this function shipped (v21),
+# reproduced 3/3 on affected first_boot.sh versions and 0/3 without it on the
+# same hardware/SD card. The host already has /dev/mmcblk0p1 mounted at
+# /mnt/boot (confirmed live via /proc/mounts), so this now bind-mounts that
+# existing mountpoint -- same pattern as apply_discard_fix's /mnt/overlay
+# bind mount -- instead of re-mounting the raw block device. No longer needs
+# --privileged or -v /dev:/dev either, since it never touches /dev directly.
 apply_usb_host_mode_fix() {
   ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
-    "docker run --rm --privileged -v /dev:/dev alpine sh -c '
-      mkdir -p /mnt/boot && mount /dev/mmcblk0p1 /mnt/boot
+    "docker run --rm -v /mnt/boot:/mnt/boot alpine sh -c '
       if grep -q \"^dtoverlay=dwc2,dr_mode=host\" /mnt/boot/config.txt; then
-        umount /mnt/boot
         exit 0
       fi
       cp /mnt/boot/config.txt /mnt/boot/config.txt.preusbfix.bak
       sed -i \"s/^otg_mode=1/#otg_mode=1/\" /mnt/boot/config.txt
       sed -i \"/^#otg_mode=1/a dtoverlay=dwc2,dr_mode=host\" /mnt/boot/config.txt
-      umount /mnt/boot
     '" 2>/dev/null
   echo "USB host-mode overlay ensured (active on next reboot)."
 }

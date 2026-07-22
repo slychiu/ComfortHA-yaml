@@ -1,6 +1,6 @@
 {
-  "version": 26,
-  "changelog": "Add automatic_test_result input_text helper + Config Files dashboard card, for the new pre-ship automatic test harness to record pass/fail results on.",
+  "version": 27,
+  "changelog": "Add cytech_check_hdmi shell_command + sensor: pre-ship harness now checks whether a monitor was detected on HDMI at boot.",
   "warnings": [],
   "files": [
     "first_boot.sh",
@@ -8,6 +8,7 @@
     "dev_reset.sh",
     "cytech_reject_update.sh",
     "cytech_check_only.sh",
+    "cytech_check_hdmi.sh",
     "packages/cytech.yaml",
     "cytech_update.sh",
     "welcome_dashboard.json",

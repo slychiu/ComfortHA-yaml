@@ -4,6 +4,8 @@
 # v25: comment-only bump so cytech_update.sh's auto-restart trigger fires on
 # already-deployed devices -- the actual fix this release ships lives only in
 # first_boot.sh's apply_usb_host_mode_fix() (see that function for detail).
+# v27: adds cytech_check_hdmi shell_command + sensor for the pre-ship
+# automatic test harness's HDMI-monitor-detected-at-boot check.
 shell_command:
   cytech_check_only: "nohup bash /config/cytech_check_only.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_update: "nohup bash /config/cytech_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"
@@ -22,6 +24,7 @@ shell_command:
   dev_reset: "touch /config/.reset_requested"
   enable_remote_support: "nohup bash /config/enable_remote_support.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   disable_remote_support: "nohup bash /config/disable_remote_support.sh </dev/null >> /config/cytech_update.log 2>&1 &"
+  cytech_check_hdmi: "nohup bash /config/cytech_check_hdmi.sh </dev/null >> /config/cytech_update.log 2>&1 &"
 
 input_boolean:
   remote_support_access:
@@ -40,6 +43,14 @@ timer:
     duration: "01:00:00"
 
 command_line:
+  - sensor:
+      name: "Cytech HDMI Result"
+      unique_id: cytech_hdmi_result_sensor
+      command: "cat /config/.cytech_hdmi_result 2>/dev/null || echo '{}'"
+      value_template: "{{ value_json.ts | default('') }}"
+      json_attributes:
+        - message
+      scan_interval: 30
   - sensor:
       name: "Cytech Version"
       unique_id: cytech_version_sensor

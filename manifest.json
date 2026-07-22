@@ -1,6 +1,6 @@
 {
-  "version": 25,
-  "changelog": "first_boot.sh: fixed apply_usb_host_mode_fix() raw-mounting /dev/mmcblk0p1 on every boot to run its idempotency check, which raced the host's own already-active mount of that device and produced a harmless but alarming 'Can't open blockdev' kernel message on every boot (introduced in v21). Now bind-mounts the host's existing /mnt/boot mountpoint instead, same pattern already used by apply_discard_fix. Root-caused and verified via live bisection: reproduced 3/3 with the old code, 0/3 with the fix, on the same hardware/SD card.",
+  "version": 26,
+  "changelog": "Add automatic_test_result input_text helper + Config Files dashboard card, for the new pre-ship automatic test harness to record pass/fail results on.",
   "warnings": [],
   "files": [
     "first_boot.sh",

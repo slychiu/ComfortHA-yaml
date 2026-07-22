@@ -28,6 +28,12 @@ input_boolean:
     name: "Remote Support Access"
     icon: mdi:account-key
 
+input_text:
+  automatic_test_result:
+    name: "Automatic Test Result"
+    max: 255
+    icon: mdi:clipboard-check-outline
+
 timer:
   remote_support_access:
     name: "Remote Support Access"

@@ -1,6 +1,6 @@
 {
-  "version": 27,
-  "changelog": "Add cytech_check_hdmi shell_command + sensor: pre-ship harness now checks whether a monitor was detected on HDMI at boot.",
+  "version": 28,
+  "changelog": "Add cytech_check_usb shell_command + sensor: pre-ship harness now checks whether a USB storage device (SD card reader) was detected at boot, and fails the test if not.",
   "warnings": [],
   "files": [
     "first_boot.sh",
@@ -9,6 +9,7 @@
     "cytech_reject_update.sh",
     "cytech_check_only.sh",
     "cytech_check_hdmi.sh",
+    "cytech_check_usb.sh",
     "packages/cytech.yaml",
     "cytech_update.sh",
     "welcome_dashboard.json",

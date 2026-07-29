@@ -10,6 +10,13 @@
 # automatic test harness's USB-storage-detected-at-boot check. Unlike the
 # HDMI check, the harness treats a missing USB device here as a real test
 # failure (see cytech_check_usb.sh for why).
+# v29: cytech_hdmi_result/cytech_usb_result scan_interval 30s -> 5s. Both
+# scripts write their result file in under a second, but at 30s the
+# command_line sensor's own refresh cadence meant the pre-ship harness could
+# see no fresh result for up to ~2x scan_interval (worst case ~60s) after a
+# fresh onboarding, since a newly-set-up command_line sensor's first scan
+# doesn't necessarily land right away -- live-hit this exact worst case
+# 2026-07-29 (harness's 60s timeout expired 1s before the sensor updated).
 shell_command:
   cytech_check_only: "nohup bash /config/cytech_check_only.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_update: "nohup bash /config/cytech_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"
@@ -55,7 +62,7 @@ command_line:
       value_template: "{{ value_json.ts | default('') }}"
       json_attributes:
         - message
-      scan_interval: 30
+      scan_interval: 5
   - sensor:
       name: "Cytech USB Result"
       unique_id: cytech_usb_result_sensor
@@ -63,7 +70,7 @@ command_line:
       value_template: "{{ value_json.ts | default('') }}"
       json_attributes:
         - message
-      scan_interval: 30
+      scan_interval: 5
   - sensor:
       name: "Cytech Version"
       unique_id: cytech_version_sensor

@@ -1,6 +1,6 @@
 {
-  "version": 28,
-  "changelog": "Add cytech_check_usb shell_command + sensor: pre-ship harness now checks whether a USB storage device (SD card reader) was detected at boot, and fails the test if not.",
+  "version": 29,
+  "changelog": "Reduce cytech_hdmi_result/cytech_usb_result scan_interval 30s -> 5s so the pre-ship harness reliably sees a fresh result within its timeout instead of racing the sensor's own refresh cadence.",
   "warnings": [],
   "files": [
     "first_boot.sh",

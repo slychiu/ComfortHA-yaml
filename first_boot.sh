@@ -222,7 +222,7 @@ echo "=== maintenance_repair $(date) ==="
 set -x
 DEVICE_ID=$(cat /config/device_id.txt)
 # Read full Tailscale DNSName live — works regardless of which tailnet is in use
-FULL_DNS=$(docker exec addon_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null \
+FULL_DNS=$(docker exec app_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null \
   | jq -r '.Self.DNSName // empty' | sed 's/\.$//')
 [ -z "$FULL_DNS" ] && FULL_DNS="${DEVICE_ID}.tailad4a00.ts.net"
 ha core stop
@@ -407,6 +407,50 @@ ensure_ssh_admin_access() {
     ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
       "echo '$AUTH_KEYS_JSON' | jq -r '.[]' > /etc/ssh/authorized_keys"
   fi
+}
+
+# Blocks until sshd inside the SSH addon actually accepts a connection, and
+# force-restarts the addon if it doesn't come up on its own.
+#
+# Supervisor's own addon state is NOT a usable readiness signal here. reset.sh
+# deliberately ships the golden image with blank ssh.password and
+# ssh.authorized_keys, so on a clone's very first boot the addon can start --
+# via boot:auto, long before Core and therefore this script exist to configure
+# it -- against those blank credentials. Its init-ssh service refuses to come
+# up ("Configuration of this app is incomplete"), exits 1, and the watchdog
+# crash-loops it for ~2 minutes before giving up. Supervisor reports state
+# "started" throughout that, and answers a /start with "already running!" -- a
+# no-op -- so credentials POSTed by ensure_ssh_admin_access never reach any
+# container and sshd stays down for the rest of the boot. The old loop here
+# polled .data.state, saw "started", and broke on its first iteration; every
+# nested-ssh step afterwards then failed with "Connection refused", silently,
+# since none of them check exit status. That took out the entire Tailscale
+# registration block, so the device never got a node identity, a QR, or remote
+# access -- root-caused 2026-08-01 on a fresh SD image.
+#
+# Probing the real thing costs nothing on the normal path (first attempt
+# succeeds) and self-heals the crash-loop case without gratuitously bouncing a
+# healthy addon on every Core restart.
+wait_for_ssh_addon() {
+  local i=1
+  while [ "$i" -le 24 ]; do
+    if ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+         -o BatchMode=yes root@a0d7b954-ssh true 2>/dev/null; then
+      [ "$i" -gt 1 ] && echo "SSH addon reachable after ~$(( (i - 1) * 5 ))s."
+      return 0
+    fi
+    # 30s in, stop waiting on a container that may be looping on stale options
+    # and force Supervisor to build a new one from the options just POSTed.
+    if [ "$i" -eq 6 ]; then
+      echo "SSH addon still unreachable after 30s -- forcing a restart to pick up current options."
+      curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
+           http://supervisor/addons/a0d7b954_ssh/restart > /dev/null 2>&1
+    fi
+    sleep 5
+    i=$((i + 1))
+  done
+  echo "ERROR: SSH addon never became reachable -- host-level provisioning steps will fail."
+  return 1
 }
 
 # Idempotently ensures the SSH addon's watcher loop is present. This is what
@@ -723,14 +767,11 @@ if [ -f /config/.zero_touch_completed ]; then
   fi
   if [ -f /config/.ssh/id_rsa ]; then
     ensure_ssh_admin_access
-    # Normally already up well before this point (boot: auto) -- this is
-    # only a real wait the first time ensure_ssh_admin_access has to change
-    # anything (e.g. an existing device's first boot after adopting this).
-    for _ in 1 2 3 4 5 6; do
-      STATE=$(curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info | jq -r '.data.state')
-      [ "$STATE" = "started" ] && break
-      sleep 5
-    done
+    # Normally already up well before this point (boot: auto), so this returns
+    # on its first probe -- it's only a real wait the first time
+    # ensure_ssh_admin_access has to change anything (e.g. an existing device's
+    # first boot after adopting this).
+    wait_for_ssh_addon
     apply_discard_fix
     apply_usb_host_mode_fix
     check_and_apply_updates
@@ -739,7 +780,7 @@ if [ -f /config/.zero_touch_completed ]; then
     ensure_remote_qr
 
     TS_STATE=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
-      "docker exec addon_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null" \
+      "docker exec app_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null" \
       2>/dev/null | jq -r '.BackendState // empty' 2>/dev/null)
 
     if [ "$TS_STATE" = "NeedsLogin" ]; then
@@ -747,14 +788,14 @@ if [ -f /config/.zero_touch_completed ]; then
       { set +x; } 2>/dev/null
       AUTH_KEY=$(get_auth_key)
       ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
-        "docker exec addon_a0d7b954_tailscale /opt/tailscale up \
+        "docker exec app_a0d7b954_tailscale /opt/tailscale up \
           --authkey='${AUTH_KEY}' \
           --accept-routes=true --hostname=cytech" 2>/dev/null
       set -x
       echo "Tailscale re-auth sent. Waiting 90s for Funnel and hostname to stabilise..."
       sleep 90
       NEW_FULL_DNS=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
-        "docker exec addon_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null" \
+        "docker exec app_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null" \
         2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//')
       NEW_HOSTNAME=$(echo "$NEW_FULL_DNS" | cut -d. -f1)
       echo "Tailscale assigned: ${NEW_FULL_DNS}"
@@ -773,7 +814,7 @@ if [ -f /config/.zero_touch_completed ]; then
       # Compare full Tailscale DNSName against stored external_url.
       # Catches hostname changes AND tailnet domain changes (e.g. user switches to personal Tailscale).
       CURRENT_FULL_DNS=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
-        "docker exec addon_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null" \
+        "docker exec app_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null" \
         2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//')
       STORED_EXTERNAL=$(python3 -c \
         "import json; d=json.load(open('/config/.storage/core.config')); \
@@ -823,12 +864,11 @@ chmod 600 /config/.ssh/id_rsa
 # boot: auto, watchdog on -- see ensure_ssh_admin_access.
 ensure_ssh_admin_access
 
-# Wait for the addon to actually be up before relying on SSH into it.
-for _ in 1 2 3 4 5 6; do
-  STATE=$(curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info | jq -r '.data.state')
-  [ "$STATE" = "started" ] && break
-  sleep 5
-done
+# Wait for the addon to actually be up before relying on SSH into it. Every
+# host-level step below tunnels through it, so a false-positive readiness
+# signal here silently no-ops the whole rest of provisioning -- Tailscale
+# included. See wait_for_ssh_addon.
+wait_for_ssh_addon
 
 # Apply DISCARD fix now that SSH addon is running
 apply_discard_fix
@@ -851,7 +891,7 @@ apply_usb_host_mode_fix
 # Tailscale state at this point (reset.sh wipes it at capture time), so this
 # doesn't affect normal first-ever-boot provisioning.
 EXISTING_FULL_DNS=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no root@a0d7b954-ssh \
-  "docker exec addon_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null" \
+  "docker exec app_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null" \
   | jq -r 'select(.BackendState=="Running") | .Self.DNSName // empty' | sed 's/\.$//')
 
 if [ -f /config/.dev_reset_mode ] || [ -n "$EXISTING_FULL_DNS" ]; then
@@ -866,7 +906,7 @@ if [ -f /config/.dev_reset_mode ] || [ -n "$EXISTING_FULL_DNS" ]; then
   curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_tailscale/start 2>/dev/null || true
   sleep 15
   ACTUAL_FULL_DNS=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no root@a0d7b954-ssh \
-    "docker exec addon_a0d7b954_tailscale /opt/tailscale status --json" \
+    "docker exec app_a0d7b954_tailscale /opt/tailscale status --json" \
     | jq -r '.Self.DNSName // empty' | sed 's/\.$//')
   ACTUAL_HOSTNAME=$(echo "$ACTUAL_FULL_DNS" | cut -d. -f1)
 else
@@ -884,13 +924,13 @@ else
   { set +x; } 2>/dev/null
   AUTH_KEY=$(get_auth_key)
   ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no root@a0d7b954-ssh \
-    "docker exec addon_a0d7b954_tailscale /opt/tailscale up --authkey='${AUTH_KEY}' --accept-routes=true --hostname=cytech"
+    "docker exec app_a0d7b954_tailscale /opt/tailscale up --authkey='${AUTH_KEY}' --accept-routes=true --hostname=cytech"
   set -x
 
   # Wait for share-homeassistant s6 service to re-establish Funnel (~90s)
   sleep 90
   ACTUAL_FULL_DNS=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no root@a0d7b954-ssh \
-    "docker exec addon_a0d7b954_tailscale /opt/tailscale status --json" \
+    "docker exec app_a0d7b954_tailscale /opt/tailscale status --json" \
     | jq -r '.Self.DNSName // empty' | sed 's/\.$//')
   ACTUAL_HOSTNAME=$(echo "$ACTUAL_FULL_DNS" | cut -d. -f1)
 fi
@@ -923,7 +963,7 @@ trap 'rm -f /config/.reset_cycle_active' EXIT
 sleep 5
 DEVICE_ID=$(cat /config/device_id.txt)
 # Read full Tailscale DNSName live — correct regardless of which tailnet is in use
-FULL_DNS=$(docker exec addon_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null \
+FULL_DNS=$(docker exec app_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null \
   | jq -r '.Self.DNSName // empty' | sed 's/\.$//')
 [ -z "$FULL_DNS" ] && FULL_DNS="${DEVICE_ID}.tailad4a00.ts.net"
 # Stop HA so its shutdown-save can't overwrite the URL edits below

@@ -1,6 +1,6 @@
 {
-  "version": 29,
-  "changelog": "Reduce cytech_hdmi_result/cytech_usb_result scan_interval 30s -> 5s so the pre-ship harness reliably sees a fresh result within its timeout instead of racing the sensor's own refresh cadence.",
+  "version": 30,
+  "changelog": "Fix fresh SD images never getting remote access. reset.sh blanked the SSH addon's credentials but left boot:auto/watchdog:true, so a clone's first boot crash-looped the addon on 'Configuration of this app is incomplete' during the exact window first_boot.sh needs SSH to register Tailscale -- and Supervisor answered first_boot.sh's /start with 'already running!', so the credentials it had just written never reached any container. first_boot.sh now probes real sshd instead of trusting Supervisor's addon state, and force-restarts the addon if it doesn't come up; reset.sh also sets boot:manual/watchdog:false while credentials are blank. Also carries the previously-uncommitted addon_ -> app_ container rename (10 sites) that HA OS's container prefix change required.",
   "warnings": [],
   "files": [
     "first_boot.sh",

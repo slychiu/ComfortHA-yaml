@@ -102,6 +102,16 @@ curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0
   | jq '.data.options | .ssh.password = "" | .ssh.authorized_keys = [] | {options: .}' > /tmp/ssh_reset_opts.json
 curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
      -d @/tmp/ssh_reset_opts.json http://supervisor/addons/a0d7b954_ssh/options
+# Drop boot:auto/watchdog too, or the clone's first boot has Supervisor
+# auto-starting an addon we just made unstartable on purpose: init-ssh exits 1
+# on blank credentials and the watchdog crash-loops it for ~2 minutes before
+# giving up -- the same window in which first_boot.sh needs SSH to register
+# Tailscale, and during which Supervisor answers /start with "already
+# running!" instead of applying the credentials first_boot.sh just wrote.
+# ensure_ssh_admin_access sets both back to auto/true once real credentials
+# exist, so this only covers the gap before it runs.
+curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
+     -d '{"boot": "manual", "watchdog": false}' http://supervisor/addons/a0d7b954_ssh/options
 
 # Clear per-user sidebar preferences so new users inherit the default lovelace_dashboards order
 rm -f /config/.storage/frontend.user_data_*

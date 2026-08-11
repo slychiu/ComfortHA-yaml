@@ -1,6 +1,7 @@
 {
-  "version": 31,
-  "changelog": "Customers no longer see 'Unsupported system - Unsupported software'. Every host-level fix (DISCARD udev rule, USB host-mode overlay, Tailscale state clear) used to run in busybox/alpine scratch images pulled on every boot; Home Assistant Supervisor flags any docker image outside the ecosystem as unsupported software at every full power-on (auto-clears ~1h later, but visible to customers in the meantime). All fixes now run on the Supervisor-managed core image instead (resolved dynamically via 'docker inspect homeassistant'), and both first_boot.sh and reset.sh now remove the busybox/alpine images so neither this card nor any clone can ever trigger the flag again. Verified live on cytech.local: after a full power-on reboot the supervisor shows unsupported: [] and no 'Found unsupported images' entry, with all fixes still applying (DISCARD rule + USB overlay confirmed written via the core image).",
+  "version": 32,
+  "changelog": "Every device now gets the 'Register Control Example' dashboard (Comfort outputs/flags + counters/sensors) with correct contents, renamed in the sidebar. Previously this only existed as manual per-device edits (cytech.local 2026-08-10, ems.local 2026-08-11) and drifted: ems.local's storage file held a UI-created placeholder (a 'sections' view with a 'New section' heading) under the legacy id dashboard_automation, and clones from the stale golden image carry a registry entry with no storage file at all. New ensure_register_control_dashboard() in first_boot.sh's maintenance branch self-heals on every boot: creates the storage file when missing, replaces only placeholder content (never a customized dashboard), renames the sidebar title to 'Register Control Example' whichever id exists, and registers the canonical automation-dashboard id when neither exists. Storage mode, so users can edit it in the UI.",
+  "warnings": [],
   "warnings": [],
   "files": [
     "first_boot.sh",

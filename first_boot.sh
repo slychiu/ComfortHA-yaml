@@ -637,6 +637,143 @@ ensure_remote_qr() {
   fi
 }
 
+# v32: ships the "Register Control Example" dashboard (Comfort outputs/
+# flags + counters/sensors, storage mode so users can edit it) to every
+# device, healing whatever prior state exists: golden-image clones carry an
+# old registry entry with no storage file, updated devices can have a
+# UI-created placeholder ("sections" view with a "New section" heading,
+# 585-byte file observed live on ems.local 2026-08-11) under the legacy id
+# dashboard_automation, and the fixed id automation-dashboard (cytech.local)
+# may still carry the old title. Replaces placeholder content (never a
+# legitimately customized dashboard -- only touched when it has no
+# Outputs & Flags / Counters & Sensors markers at all) and renames the
+# sidebar title whichever id exists; creates the canonical automation-
+# dashboard id when neither exists. Same pattern as ensure_reset_dashboard.
+ensure_register_control_dashboard() {
+  local RESULT
+  RESULT=$(python3 - << 'PYEOF'
+import json, os
+
+LF = '/config/.storage/lovelace_dashboards'
+CANONICAL = 'automation-dashboard'
+LEGACY = 'dashboard_automation'
+TITLE = 'Register Control Example'
+
+VIEWS = [{
+    "title": "Automation",
+    "layout": {"type": "grid", "columns": 2},
+    "cards": [
+        {
+            "type": "entities",
+            "title": "Outputs & Flags",
+            "show_header_toggle": False,
+            "entities": [
+                "switch.cytech_comfort_mqtt_output001",
+                "switch.cytech_comfort_mqtt_output002",
+                "switch.cytech_comfort_mqtt_output003",
+                "switch.cytech_comfort_mqtt_output004",
+                "switch.cytech_comfort_mqtt_output005",
+                "switch.cytech_comfort_mqtt_output006",
+                "switch.cytech_comfort_mqtt_output007",
+                "switch.cytech_comfort_mqtt_output008",
+                "switch.cytech_comfort_mqtt_flag001",
+                "switch.cytech_comfort_mqtt_flag002",
+                "switch.cytech_comfort_mqtt_flag003",
+                "switch.cytech_comfort_mqtt_flag004",
+                "switch.cytech_comfort_mqtt_flag005",
+                "switch.cytech_comfort_mqtt_flag006",
+                "switch.cytech_comfort_mqtt_flag007",
+                "switch.cytech_comfort_mqtt_flag008"
+            ]
+        },
+        {
+            "type": "entities",
+            "title": "Counters & Sensors",
+            "show_header_toggle": False,
+            "entities": [
+                "number.cytech_comfort_mqtt_counter000",
+                "number.cytech_comfort_mqtt_counter001",
+                "number.cytech_comfort_mqtt_counter002",
+                "number.cytech_comfort_mqtt_counter003",
+                "number.cytech_comfort_mqtt_counter004",
+                "number.cytech_comfort_mqtt_counter005",
+                "number.cytech_comfort_mqtt_counter006",
+                "number.cytech_comfort_mqtt_counter007",
+                "number.cytech_comfort_mqtt_sensor000",
+                "number.cytech_comfort_mqtt_sensor001",
+                "number.cytech_comfort_mqtt_sensor002",
+                "number.cytech_comfort_mqtt_sensor003",
+                "number.cytech_comfort_mqtt_sensor004",
+                "number.cytech_comfort_mqtt_sensor005",
+                "number.cytech_comfort_mqtt_sensor006",
+                "number.cytech_comfort_mqtt_sensor007"
+            ]
+        }
+    ]
+}]
+
+changed = []
+
+# 1. Registry: resolve which id is in use, rename its title, or create the
+#    canonical entry when neither exists. If the registry file itself is
+#    missing the device is too broken to heal from here -- HA rebuilds it.
+if not os.path.exists(LF):
+    print("lovelace_dashboards registry missing -- skipping")
+    raise SystemExit(0)
+reg = json.load(open(LF))
+items = reg['data']['items']
+dash_id = None
+for i in items:
+    if i.get('id') == CANONICAL:
+        dash_id = CANONICAL
+        break
+    if i.get('id') == LEGACY:
+        dash_id = LEGACY
+if dash_id:
+    for i in items:
+        if i.get('id') == dash_id and i.get('title') != TITLE:
+            i['title'] = TITLE
+            json.dump(reg, open(LF, 'w'))
+            changed.append(f"renamed {dash_id} -> {TITLE}")
+            break
+else:
+    items.append({"id": CANONICAL, "show_in_sidebar": True,
+                  "icon": "mdi:robot-industrial", "title": TITLE,
+                  "require_admin": False, "mode": "storage",
+                  "url_path": CANONICAL})
+    dash_id = CANONICAL
+    json.dump(reg, open(LF, 'w'))
+    changed.append(f"registered {CANONICAL}")
+
+# 2. Content: create the storage file when missing; replace it only when it
+#    is the UI-created placeholder (no real cards at all), never a
+#    customized dashboard.
+sf = f'/config/.storage/lovelace.{dash_id}'
+if not os.path.exists(sf):
+    dash = {"version": 1, "minor_version": 1, "key": f"lovelace.{dash_id}",
+            "data": {"config": {"views": VIEWS}}}
+    json.dump(dash, open(sf, 'w'))
+    changed.append(f"created {sf}")
+else:
+    raw = open(sf).read()
+    if '"heading": "New section"' in raw or (
+            'Outputs & Flags' not in raw and 'Counters & Sensors' not in raw):
+        open(sf + '.pre_v32_backup', 'w').write(raw)
+        dash = json.loads(raw)
+        dash['data']['config'] = {"views": VIEWS}
+        json.dump(dash, open(sf, 'w'))
+        changed.append(f"replaced placeholder content of {dash_id}")
+
+print("; ".join(changed) if changed else "Register Control dashboard already up to date")
+PYEOF
+)
+  echo "$RESULT"
+  if echo "$RESULT" | grep -qE "registered|created|replaced|renamed"; then
+    echo "Register Control dashboard changes applied — restarting HA to load them."
+    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/restart >/dev/null || true
+  fi
+}
+
 # Home Assistant Supervisor's own DNS plugin defaults to Cloudflare over
 # DNS-over-TLS (port 853) whenever no explicit "servers" are configured --
 # fine on networks that allow it, but some corporate/guest/hotel-style
@@ -794,6 +931,7 @@ if [ -f /config/.zero_touch_completed ]; then
     ensure_reset_watcher
     ensure_reset_dashboard
     ensure_remote_qr
+    ensure_register_control_dashboard
 
     TS_STATE=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
       "docker exec app_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null" \

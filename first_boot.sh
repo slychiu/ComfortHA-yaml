@@ -18,10 +18,11 @@ apply_discard_fix() {
   printf 'ACTION=="add", KERNEL=="mmcblk0", SUBSYSTEM=="block", ATTR{queue/discard_max_bytes}="0"\n' \
     > /config/.discard_rule.tmp
   ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
-    "docker run --rm \
+    "docker run --rm --entrypoint sh \
       -v /mnt/overlay:/host_overlay \
       -v /mnt/data/supervisor/homeassistant:/ha_config:ro \
-      busybox sh -c 'mkdir -p /host_overlay/etc/udev/rules.d && cp /ha_config/.discard_rule.tmp /host_overlay/etc/udev/rules.d/99-mmc-nodiscard.rules'" 2>/dev/null
+      \$(docker inspect homeassistant --format '{{.Config.Image}}') \
+      -c 'mkdir -p /host_overlay/etc/udev/rules.d && cp /ha_config/.discard_rule.tmp /host_overlay/etc/udev/rules.d/99-mmc-nodiscard.rules'" 2>/dev/null
   rm -f /config/.discard_rule.tmp
   echo "DISCARD fix written to host overlay (active on next reboot)."
 }
@@ -43,9 +44,13 @@ apply_discard_fix() {
 # existing mountpoint -- same pattern as apply_discard_fix's /mnt/overlay
 # bind mount -- instead of re-mounting the raw block device. No longer needs
 # --privileged or -v /dev:/dev either, since it never touches /dev directly.
+# FIX 2026-08-11 (v31): runs on the Supervisor-managed core image instead of
+# the alpine scratch image, so Supervisor never flags "unsupported software".
 apply_usb_host_mode_fix() {
   ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
-    "docker run --rm -v /mnt/boot:/mnt/boot alpine sh -c '
+    "docker run --rm --entrypoint sh -v /mnt/boot:/mnt/boot \
+      \$(docker inspect homeassistant --format '{{.Config.Image}}') \
+      -c '
       if grep -q \"^dtoverlay=dwc2,dr_mode=host\" /mnt/boot/config.txt; then
         exit 0
       fi
@@ -54,6 +59,17 @@ apply_usb_host_mode_fix() {
       sed -i \"/^#otg_mode=1/a dtoverlay=dwc2,dr_mode=host\" /mnt/boot/config.txt
     '" 2>/dev/null
   echo "USB host-mode overlay ensured (active on next reboot)."
+}
+
+# v31: every host-level fix above used to run in busybox/alpine scratch images
+# pulled on each boot. Home Assistant Supervisor flags any docker image outside
+# the ecosystem as "Unsupported software" at every full power-on (auto-clears
+# ~1h later, but the warning is visible to customers). All fixes now run on the
+# Supervisor-managed core image instead; this removes the old scratch images so
+# neither they nor any clone of this card can ever trigger the flag again.
+remove_scratch_images() {
+  ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
+    "docker image rm busybox alpine >/dev/null 2>&1 || true"
 }
 
 # Fast write/readback canary -- run ONCE, on a card's first real boot, before
@@ -833,6 +849,7 @@ if [ -f /config/.zero_touch_completed ]; then
       echo "Tailscale state: ${TS_STATE} (no action needed)"
     fi
   fi
+  remove_scratch_images
   exit 0
 fi
 
@@ -916,7 +933,10 @@ else
   curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_tailscale/stop
   sleep 8
   ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no root@a0d7b954-ssh \
-    "docker run --rm -v /mnt/data/supervisor/apps/data/a0d7b954_tailscale:/tsdata busybox sh -c 'rm -f /tsdata/tailscaled.state && rm -rf /tsdata/state && echo cleared'"
+    "docker run --rm --entrypoint sh \
+      -v /mnt/data/supervisor/apps/data/a0d7b954_tailscale:/tsdata \
+      \$(docker inspect homeassistant --format '{{.Config.Image}}') \
+      -c 'rm -f /tsdata/tailscaled.state && rm -rf /tsdata/state && echo cleared'"
   curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_tailscale/start
   sleep 20
 
@@ -1054,6 +1074,7 @@ FINISH_EOF
       "nohup bash /config/finish_firstboot.sh </dev/null >> /config/finish_debug.log 2>&1 &"
 
     echo "Finish script launched in SSH addon. Deployment complete."
+    remove_scratch_images
 else
     echo "ERROR: Tailscale failed to connect! Leaving SSH open for debugging."
 fi

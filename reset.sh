@@ -1,5 +1,5 @@
 #!/bin/bash
-#25/5/26 v3
+#25/5/26 v4
 trap '' HUP  # survive SSH disconnect
 exec > >(tee /config/reset.log) 2>&1
 
@@ -22,13 +22,21 @@ cd /config
 # directly (no nested ssh hop) because reset.sh already executes inside the
 # SSH addon container, which has the docker socket needed to reach the host
 # overlay (see project_sdcard_fix memory).
+# v4 (2026-08-11): runs on the Supervisor-managed core image instead of
+# busybox/alpine scratch images -- Supervisor flags any image outside the
+# ecosystem as "Unsupported software" on every power-on, and this image is
+# the source for every customer clone, so it must never carry them.
 echo "Baking DISCARD-disable udev rule into host overlay for golden image..."
 printf 'ACTION=="add", KERNEL=="mmcblk0", SUBSYSTEM=="block", ATTR{queue/discard_max_bytes}="0"\n' \
   > /tmp/99-mmc-nodiscard.rules
-docker run --rm -v /mnt/overlay:/host_overlay -v /tmp:/staging busybox \
-  sh -c 'mkdir -p /host_overlay/etc/udev/rules.d && cp /staging/99-mmc-nodiscard.rules /host_overlay/etc/udev/rules.d/99-mmc-nodiscard.rules'
+docker run --rm --entrypoint sh \
+  -v /mnt/overlay:/host_overlay -v /tmp:/staging \
+  "$(docker inspect homeassistant --format '{{.Config.Image}}')" \
+  -c 'mkdir -p /host_overlay/etc/udev/rules.d && cp /staging/99-mmc-nodiscard.rules /host_overlay/etc/udev/rules.d/99-mmc-nodiscard.rules'
 rm -f /tmp/99-mmc-nodiscard.rules
-if docker run --rm -v /mnt/overlay:/host_overlay busybox test -f /host_overlay/etc/udev/rules.d/99-mmc-nodiscard.rules; then
+if docker run --rm --entrypoint sh -v /mnt/overlay:/host_overlay \
+  "$(docker inspect homeassistant --format '{{.Config.Image}}')" \
+  -c 'test -f /host_overlay/etc/udev/rules.d/99-mmc-nodiscard.rules'; then
   echo "DISCARD rule confirmed present in host overlay -- safe to capture this image."
 else
   echo "ERROR: DISCARD rule NOT found in host overlay after write -- DO NOT capture this image until this is fixed."
@@ -121,8 +129,14 @@ rm -f /config/.storage/frontend.user_data_*
 echo "Clearing Tailscale state for fresh node identity..."
 curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_tailscale/stop
 sleep 8
-docker run --rm -v /mnt/data/supervisor/apps/data/a0d7b954_tailscale:/tsdata \
-  busybox sh -c "rm -f /tsdata/tailscaled.state && rm -rf /tsdata/state && echo 'Tailscale state cleared'"
+docker run --rm --entrypoint sh -v /mnt/data/supervisor/apps/data/a0d7b954_tailscale:/tsdata \
+  "$(docker inspect homeassistant --format '{{.Config.Image}}')" \
+  -c "rm -f /tsdata/tailscaled.state && rm -rf /tsdata/state && echo 'Tailscale state cleared'"
+
+# Remove the scratch images the old versions of this script (and old
+# first_boot.sh) used to pull -- a captured golden image must not ship them,
+# or every clone flags "Unsupported software" at power-on.
+docker image rm busybox alpine >/dev/null 2>&1 || true
 
 echo "Reset complete. HA is stopped � safe to power off and clone SD card."
 echo "On next boot, first_boot.sh will run automatically."

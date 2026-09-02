@@ -1,7 +1,6 @@
 {
-  "version": 32,
-  "changelog": "Every device now gets the 'Register Control Example' dashboard (Comfort outputs/flags + counters/sensors) with correct contents, renamed in the sidebar. Previously this only existed as manual per-device edits (cytech.local 2026-08-10, ems.local 2026-08-11) and drifted: ems.local's storage file held a UI-created placeholder (a 'sections' view with a 'New section' heading) under the legacy id dashboard_automation, and clones from the stale golden image carry a registry entry with no storage file at all. New ensure_register_control_dashboard() in first_boot.sh's maintenance branch self-heals on every boot: creates the storage file when missing, replaces only placeholder content (never a customized dashboard), renames the sidebar title to 'Register Control Example' whichever id exists, and registers the canonical automation-dashboard id when neither exists. Storage mode, so users can edit it in the UI.",
-  "warnings": [],
+  "version": 33,
+  "changelog": "Stops every update from resetting the 'Comfort Entities' dashboard. Since v23, zones_dashboard.json was bundled with each release and applied wholesale via cytech_update.sh's apply_dashboard(), silently overwriting any UI customization (rearranged cards, renamed zones, and entities added after discovery -- e.g. the bridge addon's Response buttons). zones_dashboard.json and the long-stale welcome_dashboard.json (which was anyway failing every update with a FileNotFoundError since the welcome dashboard became YAML-mode) are removed from the manifest, and their apply_dashboard() calls are removed from cytech_update.sh. Storage dashboards now stay exactly as the user left them; entities discovered by the bridge addon are still auto-created by Home Assistant and can be added to the dashboard in the UI without being overwritten. The apply_dashboard() helper remains in cytech_update.sh for any future one-off storage-dashboard push (and its next release must then drop the json from the manifest again, or it re-applies forever). No dashboard content is changed by this update -- only the pipeline stops touching it.",
   "warnings": [],
   "files": [
     "first_boot.sh",
@@ -13,8 +12,6 @@
     "cytech_check_usb.sh",
     "packages/cytech.yaml",
     "cytech_update.sh",
-    "welcome_dashboard.json",
-    "zones_dashboard.json",
     "dashboards/alarm.yaml",
     "dashboards/system.yaml",
     "dashboards/welcome.yaml",

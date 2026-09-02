@@ -80,9 +80,16 @@ notify "Updated to v${REMOTE_VER}: ${CHANGELOG}"
 # maintenance-mode branch instead: it runs using the freshly-downloaded
 # first_boot.sh on the next boot, regardless of which version was skipped.
 
-# Apply lovelace dashboard configs if included in this update.
-# Files are deleted after applying so future updates don't re-apply stale configs.
-# HA restart is required for lovelace storage changes to take effect.
+# Storage-mode dashboards are no longer pushed via updates (v33): every
+# update used to bundle zones_dashboard.json and rewrite the "Comfort
+# Entities" dashboard wholesale, silently discarding any UI customization
+# (rearranged cards, renamed zones, entities added after discovery, e.g.
+# the bridge addon's Response buttons). User-edit dashboards now stay
+# user-edit dashboards. YAML-mode dashboards ship as plain files via
+# manifest.json. Keep this apply_dashboard() around in case a future
+# release needs to push a one-off storage dashboard -- but then also
+# remind the user that the next release must remove that json from
+# the manifest, or it re-applies forever.
 LOVELACE_CHANGED=0
 apply_dashboard() {
   local SRC="$1" DEST="$2"
@@ -106,11 +113,11 @@ print('${DEST} updated (previous config backed up to ${DEST}.pre_update_backup)'
 " && rm -f "/config/${SRC}" && LOVELACE_CHANGED=1
 }
 
-apply_dashboard zones_dashboard.json lovelace.dashboard_zones
-apply_dashboard alarm_dashboard.json lovelace.comfort_alarm
-apply_dashboard system_dashboard.json lovelace.system
-apply_dashboard welcome_dashboard.json lovelace.dashboard_welcome
-
+# v33: no dashboard jsons are shipped anymore -- zones_dashboard.json and
+# welcome_dashboard.json were both removed from manifest.json. The old
+# welcome call also was actively broken: its storage file no longer exists
+# (the welcome dashboard is YAML-mode now), so every update raised a
+# FileNotFoundError and left the json on disk to re-fail next time.
 if [ "$LOVELACE_CHANGED" = "1" ] || [ "$PACKAGES_CHANGED" = "1" ] || [ "$FIRSTBOOT_CHANGED" = "1" ]; then
   curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
     http://supervisor/core/restart

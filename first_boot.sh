@@ -194,12 +194,70 @@ PYEOF
   if [ "$STATUS" = "CORRUPT" ]; then
     DETAILS=$(echo "$RESULT" | tail -n +2 | tr '\n' '; ')
     echo "INTEGRITY CHECK FAILED: $DETAILS"
+    # v42: self-heal configuration.yaml -- the ONE file whose loss stops HA
+    # from booting (the 2026-08-10 truncation incident took the device down
+    # manually-restored). .storage/* needs no help: HA's own storage helper
+    # quarantines the broken file and starts fresh (confirmed live 2026-07-07).
+    # Only restore when the snapshot itself parses, so corruption in the
+    # snapshot can never cause a restore loop.
+    CONFIG_RESTORED=0
+    RESTORED_NOTE=" The system could not self-repair: no usable snapshot of configuration.yaml exists on this device."
+    if echo "$DETAILS" | grep -q "configuration.yaml"; then
+      if [ -f /config/.cytech_snapshot/configuration.yaml ] && \
+         python3 - << 'PYEOF'
+import sys, yaml
+class TolerantLoader(yaml.SafeLoader):
+    pass
+def _construct_any_tag(loader, tag_suffix, node):
+    if isinstance(node, yaml.ScalarNode):
+        return loader.construct_scalar(node)
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node)
+    if isinstance(node, yaml.MappingNode):
+        return loader.construct_mapping(node)
+    return None
+TolerantLoader.add_multi_constructor('!', _construct_any_tag)
+with open('/config/.cytech_snapshot/configuration.yaml', 'r', encoding='utf-8') as f:
+    yaml.load(f, Loader=TolerantLoader)
+PYEOF
+      then
+        # keep the broken file for forensics, then restore the known-good copy
+        cp /config/configuration.yaml "/config/configuration.yaml.corrupt.$(date +%s)"
+        cp /config/.cytech_snapshot/configuration.yaml /config/configuration.yaml
+        CONFIG_RESTORED=1
+        RESTORED_NOTE=" configuration.yaml is the broken file and WAS restored from the last known-good snapshot (the broken copy is saved as configuration.yaml.corrupt.<timestamp>); the system restarted to load the recovered config. The card is showing the same failure signature as the last corruption incidents -- check the device soon."
+        echo "configuration.yaml was corrupt -- restored from snapshot."
+      fi
+    fi
     jq -n --arg ts "$(date +%s)" \
-      --arg msg "Data integrity issue detected on this device's SD card: ${DETAILS} This may indicate SD card failure -- check the device soon." \
+      --arg msg "Data integrity issue detected on this device's SD card: ${DETAILS}${RESTORED_NOTE}" \
       '{ts: $ts, message: $msg}' > /config/.cytech_integrity_alert
   else
     echo "Integrity check OK: configuration.yaml and .storage/* all parse correctly."
     rm -f /config/.cytech_integrity_alert
+    ensure_config_snapshot
+  fi
+}
+
+# v42: rolling known-good snapshot of /config/configuration.yaml.
+# Refreshed only right after a CLEAN integrity pass (see above), so the
+# snapshot can never contain the corruption it protects against; the previous
+# snapshot is kept as configuration.yaml.previous for forensics. When the
+# configuration changes legitimately (an update or manual edit), the next
+# clean boot snapshots the new good state. .storage/* is deliberately NOT
+# snapshotted: HA self-heals those (quarantine + fresh start) and rewinding
+# them would roll back the owner's dashboard edits and settings.
+ensure_config_snapshot() {
+  local SNAP_DIR="/config/.cytech_snapshot"
+  local SNAP="$SNAP_DIR/configuration.yaml"
+  [ -f /config/configuration.yaml ] || return 0
+  mkdir -p "$SNAP_DIR"
+  if [ ! -f "$SNAP" ] || ! cmp -s /config/configuration.yaml "$SNAP"; then
+    [ -f "$SNAP" ] && cp "$SNAP" "$SNAP_DIR/configuration.yaml.previous" 2>/dev/null || true
+    cp /config/configuration.yaml "$SNAP_DIR/configuration.yaml.tmp"
+    mv "$SNAP_DIR/configuration.yaml.tmp" "$SNAP"
+    chmod 600 "$SNAP"
+    echo "Config snapshot refreshed."
   fi
 }
 
@@ -1219,6 +1277,11 @@ if [ -f /config/.zero_touch_completed ]; then
   record_boot_event
   check_boot_storm
   check_config_integrity
+  if [ "$CONFIG_RESTORED" = "1" ]; then
+    echo "Configuration restored from snapshot -- restarting HA to load it."
+    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/restart >/dev/null
+    exit 0
+  fi
   ensure_resilient_dns
   ensure_yaml_dashboards
   if [ $? -eq 1 ]; then

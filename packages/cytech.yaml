@@ -83,6 +83,11 @@ shell_command:
   # v40: clears the one-time register popup after the automation below has
   # shown it (same pattern as cytech_clear_notify).
   cytech_clear_register_popup: "rm -f /config/.cytech_register_popup"
+  # v42: runtime integrity companion to first_boot.sh's boot-time check.
+  # Forked so the script survives long enough to (a) not hold the automation
+  # slot and (b) finish its core-restart curl after it has restored a corrupt
+  # configuration.yaml. Script: cytech_integrity_check.py in /config.
+  cytech_integrity_check: "nohup python3 /config/cytech_integrity_check.py >> /config/cytech_integrity_check.log 2>&1 &"
   # The reset watcher runs as an init_command inside the SSH addon's own
   # container, which now stays up permanently (see ensure_ssh_admin_access
   # in first_boot.sh) instead of being started/stopped around each reset --
@@ -204,7 +209,8 @@ command_line:
       scan_interval: 30
   - sensor:
       # Written by check_config_integrity in first_boot.sh's maintenance pass
-      # (every boot) when configuration.yaml or any .storage/* file fails to
+      # (every boot) OR by cytech_integrity_check.py (every 4 h while
+      # running, v42) when configuration.yaml or any .storage/* file fails to
       # parse -- the same failure signature both 2026 SD card corruption
       # incidents produced. Deliberately a separate file/sensor from
       # cytech_notify_pending/cytech_last_result: those are update-flow
@@ -217,6 +223,15 @@ command_line:
       json_attributes:
         - message
       scan_interval: 30
+  - sensor:
+      # v42: last result of the runtime config check (written on every cycle
+      # by cytech_integrity_check.py): ok / restored / error / missing /
+      # restart_failed. Distinguishes "restored" (recovered + restart fired)
+      # from a still-active problem on the System Health dashboard.
+      name: "Cytech Config Check"
+      unique_id: cytech_integrity_status_sensor
+      command: "cat /config/.cytech_integrity_status 2>/dev/null || echo unknown"
+      scan_interval: 300
   - sensor:
       # v35: SD-card health results. State is the status word (OK / FAIL /
       # SKIP), detail lives in the "message" attribute -- short enough that
@@ -302,6 +317,21 @@ command_line:
       scan_interval: 600
 
 automation:
+  # v42: runtime config health check. The boot-time check in first_boot.sh
+  # only runs at OS boot; this one runs while the system is up (every 4 h)
+  # so a corruption happening mid-session is repaired the same day -- and
+  # importantly BEFORE the next core restart (e.g. an update) would have
+  # landed in HA recovery mode. The script writes .cytech_integrity_alert
+  # when there is a problem, deleted on its next clean pass.
+  - id: cytech_check_config_health
+    alias: "Cytech: Check configuration health"
+    mode: single
+    trigger:
+      - platform: time_pattern
+        hours: 4
+    action:
+      - service: shell_command.cytech_integrity_check
+
   - id: cytech_show_integrity_alert
     alias: "Cytech: Show data integrity alert"
     mode: single
@@ -317,6 +347,25 @@ automation:
           title: "Cytech: data integrity issue detected"
           message: "{{ state_attr('sensor.cytech_integrity_alert', 'message') }}"
           notification_id: cytech_integrity_alert
+      - variables:
+          unit: "{{ states('sensor.cytech_device_id') | default('this system') }}"
+          msg: "{{ state_attr('sensor.cytech_integrity_alert', 'message') | default('data integrity issue, see dashboard') }}"
+      # v42: integrity alerts are now emailed too -- support always, plus the
+      # owner's registered address (v41 pattern: no destination switch, the
+      # owner copy happens automatically when one is registered).
+      - service: notify.cytech_alert_support
+        data:
+          title: "Cytech data integrity alert: {{ unit }}"
+          message: "{{ unit }}: {{ msg }}"
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ states('sensor.cytech_owner_email') not in ['', 'unknown', 'unavailable'] }}"
+            sequence:
+              - service: notify.cytech_alert_email
+                data:
+                  title: "Cytech data integrity alert: {{ unit }}"
+                  message: "{{ unit }}: {{ msg }}"
 
   - id: cytech_show_notification
     alias: "Cytech: Show update notification"

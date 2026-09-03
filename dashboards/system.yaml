@@ -84,8 +84,9 @@ views:
       content: |-
         ## System Health
 
-        The SD card is checked every start. If a problem is found,
-        an email is sent here as well as a notification on this screen.
+        The system checks itself at every start and every few hours
+        while running. If a problem is found, an email is sent here as
+        well as a notification on this screen.
     - type: entities
       title: SD Card
       entities:
@@ -95,6 +96,8 @@ views:
         name: Write Test
       - entity: sensor.cytech_boot_status
         name: Boots
+      - entity: sensor.cytech_integrity_status
+        name: Config Check
     - type: entities
       title: Alerts
       entities:

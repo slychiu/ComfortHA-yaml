@@ -99,6 +99,15 @@ views:
       title: Alerts
       entities:
       - entity: input_select.cytech_alert_destination
+      - entity: input_text.cytech_alert_recipient
+      - type: button
+        name: Register with Cytech
+        icon: mdi:account-sync-outline
+        tap_action:
+          action: call-service
+          service: automation.trigger
+          target:
+            entity_id: automation.cytech_register_email
       - type: button
         name: Send Test Email
         icon: mdi:email-seal-outline
@@ -107,3 +116,11 @@ views:
           service: notify.cytech_alert_email
           data:
             message: Test email from a Cytech system.
+    - type: conditional
+      conditions:
+      - condition: state
+        entity: sensor.cytech_register_result
+        state_not: ''
+      card:
+        type: markdown
+        content: '{% set r = state_attr(''sensor.cytech_register_result'', ''message'') | default('''') %}{{ r }}'

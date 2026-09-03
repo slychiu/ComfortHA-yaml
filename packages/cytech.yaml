@@ -17,6 +17,20 @@
 # fresh onboarding, since a newly-set-up command_line sensor's first scan
 # doesn't necessarily land right away -- live-hit this exact worst case
 # 2026-07-29 (harness's 60s timeout expired 1s before the sensor updated).
+# v34: combined release (the originally-planned v34/v35 were merged before
+# the first push -- no device has ever seen anything between v33 and this).
+# Ships three things: ensure_responses_card() in first_boot.sh (one-time ADD
+# of a Responses card with native button cards for the bridge addon's
+# button.comfort_* response entities; see that function for detail and the
+# v34 changelog for why this replaces the custom-card tap_action variants);
+# the mqtt sensor below ("Comfort System Status"), the data source for the
+# System Status card in dashboards/alarm.yaml -- it shadows nothing,
+# unique_id comfort_system_status exists only here, so the update is exactly
+# one new sensor on every device (packages lists append to the golden-image
+# configuration.yaml's mqtt:sensor list); and the alarm value_template fix
+# via ensure_comfort_alarm_template() in first_boot.sh (see that function
+# and the manifest changelog for detail). Content changes (not just a
+# comment bump) also trip cytech_update.sh's auto-restart trigger.
 shell_command:
   cytech_check_only: "nohup bash /config/cytech_check_only.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_update: "nohup bash /config/cytech_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"
@@ -204,3 +218,17 @@ automation:
       - service: input_boolean.turn_off
         target:
           entity_id: input_boolean.remote_support_access
+
+# v34: MQTT sensor backing the System Status card in dashboards/alarm.yaml.
+# Reads the raw panel status word from cytech_comfort_mqtt/alarm (the same
+# topic the alarm_control_panel uses) so a Trouble state is visible in HA --
+# the alarm panel entity maps Idle/Trouble/Alert to "disarmed" and therefore
+# cannot show a trouble condition on its own.
+mqtt:
+  sensor:
+    - name: Comfort System Status
+      unique_id: comfort_system_status
+      state_topic: "cytech_comfort_mqtt/alarm"
+      availability_topic: "cytech_comfort_mqtt/alarm/online"
+      payload_available: "1"
+      payload_not_available: "0"

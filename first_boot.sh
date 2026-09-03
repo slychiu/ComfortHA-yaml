@@ -774,6 +774,233 @@ PYEOF
   fi
 }
 
+# v34: The bridge addon discovers one button.comfort_* entity per Comfort
+# panel Response key. Since v33 no bundled dashboard is applied on updates
+# anymore (see the v33 changelog), devices that let the addon discover the
+# responses had NO user-facing way to press them until this one-time self-
+# heal adds a Responses card to the Comfort Entities dashboard, using the
+# native button card (no tap_action at all -- button-card v5 drops a plain
+# action-level entity: on the call-service path, which is why the earlier
+# custom-card variants errored out).
+#
+# Rules, mirroring ensure_register_control_dashboard:
+#  * only ever ADD (never replace a whole card, never touch user cards);
+#  * if a Responses card exists but its button include isn't the native
+#    button card, convert just that include (self-heals the legacy variants);
+#  * if a card exists with native buttons already, do nothing;
+#  * gate on at least one button.comfort_* state existing -- on a fresh
+#    install the card is added on a later boot once the addon has
+#    discovered them, rather than rendering an empty card.
+ensure_responses_card() {
+  local RESULT
+  if ! curl -sf -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/api/states 2>/dev/null \
+      | grep -q 'button.comfort_'; then
+    echo "No button.comfort_* entities yet -- Responses card deferred until the addon discovers them (runs again next boot)."
+    return 0
+  fi
+  RESULT=$(python3 - << 'PYEOF'
+import copy, json, os
+
+sf = '/config/.storage/lovelace.dashboard_zones'
+CARD = {
+    "type": "custom:auto-entities",
+    "card": {"type": "grid", "title": "Responses", "columns": 3, "square": False},
+    "card_param": "cards",
+    "sort": {"method": "name"},
+    "filter": {"include": [
+        {"entity_id": "button.comfort_*",
+         "options": {"type": "button", "entity": "this.entity_id"}},
+    ]},
+}
+
+if not os.path.exists(sf):
+    print("lovelace.dashboard_zones missing -- nothing to patch")
+    raise SystemExit(0)
+
+doc = json.load(open(sf))
+changed = []
+
+def includes(c):
+    return (c.get('filter', {}) or {}).get('include') or []
+
+def is_zones(c):
+    return c.get('type') == 'custom:auto-entities' and any(
+        i.get('entity_id') == 'binary_sensor.comfort_*' for i in includes(c))
+
+def is_responses(c):
+    return c.get('type') == 'custom:auto-entities' and any(
+        i.get('entity_id') == 'button.comfort_*' for i in includes(c))
+
+def patch(cards):
+    existing = next((c for c in cards if is_responses(c)), None)
+    if existing is None:
+        cards.append(copy.deepcopy(CARD))
+        changed.append("appended Responses card with native buttons")
+        return
+    inc = includes(existing)
+    if not any(i.get('entity_id') == 'button.comfort_*' for i in inc):
+        inc.append(copy.deepcopy(CARD['filter']['include'][0]))
+        changed.append("added button.comfort_* include to existing Responses card")
+        return
+    for i in inc:
+        if i.get('entity_id') == 'button.comfort_*' and \
+                (i.get('options') or {}).get('type') != 'button':
+            i['options'] = copy.deepcopy(CARD['filter']['include'][0]['options'])
+            changed.append("converted Responses button include to native button card")
+            return
+
+def walk(o):
+    if isinstance(o, dict):
+        cards = o.get('cards')
+        if isinstance(cards, list) and any(isinstance(c, dict) and is_zones(c) for c in cards):
+            patch(cards)
+            return
+        for v in o.values():
+            walk(v)
+    elif isinstance(o, list):
+        for v in o:
+            walk(v)
+
+walk(doc)
+
+if not changed:
+    print("Responses card already present with native buttons -- no change")
+else:
+    open(sf + '.pre_v34_backup', 'w').write(open(sf).read())
+    open(sf, 'w').write(json.dumps(doc))
+    print("; ".join(changed) + " -- written and re-parsed OK")
+PYEOF
+)
+  echo "$RESULT"
+  if echo "$RESULT" | grep -qE "appended|added|converted"; then
+    echo "Responses card changes applied — restarting HA to load them."
+    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/restart >/dev/null || true
+  fi
+}
+
+# v34: HA's alarm panel accepts only the standard payloads
+# (disarmed/armed_*/triggered) and rejects anything else as "unexpected
+# payload". The addon publishes the raw panel status word
+# (Idle/Trouble/Alert/Alarm) on cytech_comfort_mqtt/alarm, and its AM report
+# handler publishes a literal "triggered" for zone-trouble codes that the
+# panel then latches with nothing ever clearing it. This ensure adds the
+# value_template to the panel's mqtt.alarm_control_panel entry so the status
+# word maps onto what HA understands (Alarm -> triggered, Idle/Trouble/
+# Alert -> disarmed, everything else passthrough -- so a panel that sits in
+# TROUBLE no longer shows as a stuck "triggered"). This is the HA-side half
+# of the contract fix; the addon-side AM change is tracked separately in
+# the ucmpi4 addon. Only touches a panel entry whose state_topic is the
+# comfort alarm topic -- never sensors or other mqtt entities, never
+# anything else in configuration.yaml.
+#
+# Rules: idempotent; keeps .pre_v34_backup on first change; restarts HA if
+# the file was modified (mirrors ensure_register_control_dashboard).
+ensure_comfort_alarm_template() {
+  local RESULT
+  RESULT=$(python3 - << 'PYEOF'
+import os
+import shutil
+
+# CY_CFG override is for offline testing only; on-device it always patches
+# the real configuration.yaml.
+CFG = os.environ.get('CY_CFG', '/config/configuration.yaml')
+# These 4 lines go directly after the panel's state_topic line. The 3
+# template lines are YAML-folded into one string by the '>-' scalar --
+# exact copy of the block live-tested on cytech.local 2026-09-03.
+INSERT = [
+    '      value_template: >-',
+    '        {% if value == "Alarm" %}triggered',
+    '        {% elif value in ["Idle", "Trouble", "Alert"] %}disarmed',
+    '        {% else %}{{ value }}{% endif %}',
+]
+
+if not os.path.exists(CFG):
+    print("configuration.yaml missing -- skipping")
+    raise SystemExit(0)
+
+with open(CFG) as f:
+    lines = f.read().split('\n')
+
+# 1. Find the top-level mqtt: section, then the alarm_control_panel: list
+# inside it. Only that subsection is ever touched.
+try:
+    mqtt_i = next(i for i, l in enumerate(lines) if l == 'mqtt:')
+except StopIteration:
+    print("no mqtt: section -- skipping")
+    raise SystemExit(0)
+
+panel_i = None
+for i in range(mqtt_i + 1, len(lines)):
+    l = lines[i]
+    if l and not l.startswith(' '):
+        break  # left the mqtt: section (next top-level key)
+    if l.strip() == 'alarm_control_panel:':
+        panel_i = i
+        break
+
+if panel_i is None:
+    print("no mqtt alarm_control_panel -- skipping")
+    raise SystemExit(0)
+
+# 2. Inside the panel list, find the item owned by the comfort alarm:
+# the first '- name:' whose block contains the alarm state_topic.
+def item_end(j):
+    i = j + 1  # skip the '- name:' line itself
+    while i < len(lines) and lines[i].strip():
+        if lines[i].startswith('    - '):          # next list item
+            break
+        if lines[i].startswith('  ') and not lines[i].startswith('    '):
+            break                                  # next 2-space sub-key (sensor: etc.)
+        i += 1
+    return i
+
+topic_txt = 'state_topic: "cytech_comfort_mqtt/alarm"'
+item_i = None
+j = panel_i + 1
+while j < len(lines):
+    if lines[j].startswith('    - '):
+        if any(lines[k].strip() == topic_txt for k in range(j, item_end(j))):
+            item_i = j
+            break
+        j = item_end(j)
+    else:
+        j += 1
+
+if item_i is None:
+    print("comfort alarm panel entry not found -- skipping")
+    raise SystemExit(0)
+
+# 3. Idempotent: already patched?
+hi = item_end(item_i)
+for k in range(item_i, hi):
+    if lines[k].startswith('      value_template:'):
+        print("already has value_template -- no change")
+        raise SystemExit(0)
+
+# 4. Insert the template right after the state_topic line.
+topic_i = next(k for k in range(item_i, hi) if lines[k].strip() == topic_txt)
+new = lines[:topic_i + 1] + INSERT + lines[topic_i + 1:]
+
+# 5. Back up once, then write. Backup name follows the pattern used by the
+# other ensure functions (.pre_vXX_backup) but is version-specific so an
+# older update's backup is never silently overwritten.
+bak = CFG + '.pre_v34_backup'
+if not os.path.exists(bak):
+    shutil.copy(CFG, bak)
+
+with open(CFG, 'w') as f:
+    f.write('\n'.join(new))
+
+print("value_template added to comfort alarm panel -- updating")
+PYEOF
+)
+  echo "$RESULT"
+  if echo "$RESULT" | grep -qE "added|updated"; then
+    echo "Comfort Alarm value_template applied -- restarting HA to load it."
+    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/restart >/dev/null || true
+  fi
+}
+
 # Home Assistant Supervisor's own DNS plugin defaults to Cloudflare over
 # DNS-over-TLS (port 853) whenever no explicit "servers" are configured --
 # fine on networks that allow it, but some corporate/guest/hotel-style
@@ -932,6 +1159,8 @@ if [ -f /config/.zero_touch_completed ]; then
     ensure_reset_dashboard
     ensure_remote_qr
     ensure_register_control_dashboard
+    ensure_responses_card
+    ensure_comfort_alarm_template
 
     TS_STATE=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
       "docker exec app_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null" \

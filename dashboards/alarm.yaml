@@ -44,6 +44,36 @@ views:
               service: script.turn_on
               target:
                 entity_id: script.comfort_arm_home
+      - type: horizontal-stack
+        cards:
+        - type: markdown
+          content: |-
+            {% set status = states('sensor.comfort_system_status') %}{% if status == 'Trouble' %}Status: **<span style="color:red">Trouble</span>**
+            {% elif status == 'Alarm' %}Status: **<span style="color:red">Alarm</span>**
+            {% elif status == 'Alert' %}Status: **<span style="color:orange">Alert</span>**
+            {% elif status == 'Idle' %}Status: **Normal**
+            {% else %}Status: **{{ status | replace('_', ' ') | title }}**{% endif %}
+          card_mod:
+            style: |
+              ha-card {
+                padding: 4px 6px;
+              }
+        - type: button
+          icon: mdi:refresh
+          show_name: false
+          show_state: false
+          tap_action:
+            action: perform-action
+            perform_action: button.press
+            target:
+              entity_id: button.cytech_comfort_mqtt_refresh
+          card_mod:
+            style: |
+              ha-card {
+                width: 48px;
+                min-width: 48px;
+                margin-left: auto;
+              }
     - type: grid
       title: Keypad
       columns: 3

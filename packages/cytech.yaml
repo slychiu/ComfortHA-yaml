@@ -68,6 +68,13 @@
 # inline result line. sensor.cytech_email_configured gates the dashboard's
 # "not registered yet" hint so units without SMTP creds never nag the owner
 # to do something they can't.
+# v41: the Cytech/Me/Both alert destination switch (input_select
+# cytech_alert_destination, v35-era) is REMOVED -- it only ever controlled
+# SD alerts, and the owner's copy is now automatic: every alert always goes
+# to support@cytech.biz, and the owner's address is added only when
+# registered (sensor.cytech_owner_email, read from /config/.cytech_registered).
+# The owner's field is renamed "My Email for Alerts" (bare "My Email" read as
+# if it were the system's own address).
 shell_command:
   cytech_check_only: "nohup bash /config/cytech_check_only.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_update: "nohup bash /config/cytech_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"
@@ -108,7 +115,7 @@ input_text:
     max: 255
     icon: mdi:clipboard-check-outline
   cytech_alert_recipient:
-    name: "My Email"
+    name: "My Email for Alerts"
     max: 255
     icon: mdi:email-edit-outline
 
@@ -127,15 +134,6 @@ template:
         - service: shell_command.cytech_register_email
           data:
             email: "{{ states('input_text.cytech_alert_recipient') | trim }}"
-
-input_select:
-  cytech_alert_destination:
-    name: "SD Alert Destination"
-    icon: mdi:email-alert-outline
-    options:
-      - Cytech
-      - Me
-      - Both
 
 timer:
   remote_support_access:
@@ -292,6 +290,16 @@ command_line:
       unique_id: cytech_email_configured_sensor
       command: "grep -q '^CY_SMTP_PASS=' /config/.cytech_secrets 2>/dev/null && echo yes || echo no"
       scan_interval: 600
+  - sensor:
+      # v41: the owner's registered alert address (empty when never
+      # registered). Gates the automatic owner copy of every alert -- there
+      # is no user-facing destination switch anymore: alerts ALWAYS go to
+      # support@cytech.biz, and the owner's address is included only when one
+      # has been registered.
+      name: "Cytech Owner Email"
+      unique_id: cytech_owner_email_sensor
+      command: "cat /config/.cytech_registered 2>/dev/null | tr -d '\n'"
+      scan_interval: 600
 
 automation:
   - id: cytech_show_integrity_alert
@@ -409,35 +417,22 @@ automation:
           title: "SD card problem detected"
           message: "{{ state_attr('sensor.cytech_sd_card_status', 'message') | default('see sensor') }}"
       - variables:
-          dest: "{{ states('input_select.cytech_alert_destination') | default('Cytech') }}"
           unit: "{{ states('sensor.cytech_device_id') }}"
           msg: "{{ state_attr('sensor.cytech_sd_card_status', 'message') | default('see sensor') }}"
+      - service: notify.cytech_alert_support
+        data:
+          title: "Cytech SD card alert: {{ unit }}"
+          message: "{{ unit }}: SD card problem: {{ msg }}"
+      # v41: the owner copy is AUTOMATIC -- sent only when the owner has
+      # registered an address (sensor.cytech_owner_email non-empty. The old
+      # Cytech/Me/Both destination switch is gone: support@cytech.biz always
+      # gets every alert, and the owner is included only if they registered.
       - choose:
           - conditions:
               - condition: template
-                value_template: "{{ dest == 'Cytech' }}"
-            sequence:
-              - service: notify.cytech_alert_support
-                data:
-                  title: "Cytech SD card alert: {{ unit }}"
-                  message: "{{ unit }}: SD card problem: {{ msg }}"
-          - conditions:
-              - condition: template
-                value_template: "{{ dest == 'Me' }}"
+                value_template: "{{ states('sensor.cytech_owner_email') not in ['', 'unknown', 'unavailable'] }}"
             sequence:
               - service: notify.cytech_alert_email
-                data:
-                  title: "Cytech SD card alert: {{ unit }}"
-                  message: "{{ unit }}: SD card problem: {{ msg }}"
-          - conditions:
-              - condition: template
-                value_template: "{{ dest == 'Both' }}"
-            sequence:
-              - service: notify.cytech_alert_email
-                data:
-                  title: "Cytech SD card alert: {{ unit }}"
-                  message: "{{ unit }}: SD card problem: {{ msg }}"
-              - service: notify.cytech_alert_support
                 data:
                   title: "Cytech SD card alert: {{ unit }}"
                   message: "{{ unit }}: SD card problem: {{ msg }}"
@@ -456,35 +451,18 @@ automation:
           title: "SD card write test failed"
           message: "{{ state_attr('sensor.cytech_sd_canary', 'message') | default('see sensor') }}"
       - variables:
-          dest: "{{ states('input_select.cytech_alert_destination') | default('Cytech') }}"
           unit: "{{ states('sensor.cytech_device_id') }}"
           msg: "{{ state_attr('sensor.cytech_sd_canary', 'message') | default('see sensor') }}"
+      - service: notify.cytech_alert_support
+        data:
+          title: "Cytech SD canary alert: {{ unit }}"
+          message: "{{ unit }}: SD canary failed: {{ msg }}"
       - choose:
           - conditions:
               - condition: template
-                value_template: "{{ dest == 'Cytech' }}"
-            sequence:
-              - service: notify.cytech_alert_support
-                data:
-                  title: "Cytech SD canary alert: {{ unit }}"
-                  message: "{{ unit }}: SD canary failed: {{ msg }}"
-          - conditions:
-              - condition: template
-                value_template: "{{ dest == 'Me' }}"
+                value_template: "{{ states('sensor.cytech_owner_email') not in ['', 'unknown', 'unavailable'] }}"
             sequence:
               - service: notify.cytech_alert_email
-                data:
-                  title: "Cytech SD canary alert: {{ unit }}"
-                  message: "{{ unit }}: SD canary failed: {{ msg }}"
-          - conditions:
-              - condition: template
-                value_template: "{{ dest == 'Both' }}"
-            sequence:
-              - service: notify.cytech_alert_email
-                data:
-                  title: "Cytech SD canary alert: {{ unit }}"
-                  message: "{{ unit }}: SD canary failed: {{ msg }}"
-              - service: notify.cytech_alert_support
                 data:
                   title: "Cytech SD canary alert: {{ unit }}"
                   message: "{{ unit }}: SD canary failed: {{ msg }}"
@@ -503,35 +481,18 @@ automation:
           title: "Restart loop suspected"
           message: "{{ state_attr('sensor.cytech_boot_status', 'message') | default('see sensor') }}"
       - variables:
-          dest: "{{ states('input_select.cytech_alert_destination') | default('Cytech') }}"
           unit: "{{ states('sensor.cytech_device_id') }}"
           msg: "{{ state_attr('sensor.cytech_boot_status', 'message') | default('see sensor') }}"
+      - service: notify.cytech_alert_support
+        data:
+          title: "Cytech restart loop alert: {{ unit }}"
+          message: "{{ unit }}: Restart loop suspected: {{ msg }}"
       - choose:
           - conditions:
               - condition: template
-                value_template: "{{ dest == 'Cytech' }}"
-            sequence:
-              - service: notify.cytech_alert_support
-                data:
-                  title: "Cytech restart loop alert: {{ unit }}"
-                  message: "{{ unit }}: Restart loop suspected: {{ msg }}"
-          - conditions:
-              - condition: template
-                value_template: "{{ dest == 'Me' }}"
+                value_template: "{{ states('sensor.cytech_owner_email') not in ['', 'unknown', 'unavailable'] }}"
             sequence:
               - service: notify.cytech_alert_email
-                data:
-                  title: "Cytech restart loop alert: {{ unit }}"
-                  message: "{{ unit }}: Restart loop suspected: {{ msg }}"
-          - conditions:
-              - condition: template
-                value_template: "{{ dest == 'Both' }}"
-            sequence:
-              - service: notify.cytech_alert_email
-                data:
-                  title: "Cytech restart loop alert: {{ unit }}"
-                  message: "{{ unit }}: Restart loop suspected: {{ msg }}"
-              - service: notify.cytech_alert_support
                 data:
                   title: "Cytech restart loop alert: {{ unit }}"
                   message: "{{ unit }}: Restart loop suspected: {{ msg }}"

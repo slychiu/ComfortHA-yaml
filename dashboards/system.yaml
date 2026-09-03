@@ -98,9 +98,8 @@ views:
     - type: entities
       title: Alerts
       entities:
-      - entity: input_select.cytech_alert_destination
       - entity: input_text.cytech_alert_recipient
-        name: My Email
+        name: My Email for Alerts
       - type: button
         name: Register with Cytech
         icon: mdi:account-sync-outline
@@ -135,5 +134,5 @@ views:
         state: ''
       card:
         type: markdown
-        content: 'Alert emails are not set up for this system yet -- enter your email in the **My Email** field above and press **Register with Cytech**.'
+        content: 'Alert emails are not set up for this system yet -- enter your email in the **My Email for Alerts** field above and press **Register with Cytech**.'
 

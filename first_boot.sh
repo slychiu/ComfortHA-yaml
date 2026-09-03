@@ -1001,6 +1001,125 @@ PYEOF
   fi
 }
 
+# v35: boot-loop detection. Every first_boot.sh run (i.e. every HA start)
+# appends an epoch to /config/.cytech_boot_events; check_boot_storm then
+# counts events in the last 24h and writes
+# /config/.cytech_boot_result {"ts","status","message"} (status
+# RESTART_STORM when >=5, OK otherwise) for sensor.cytech_boot_result.
+record_boot_event() {
+  if [ -f /config/.cytech_boot_events ]; then
+    if [ "$(wc -l < /config/.cytech_boot_events)" -gt 500 ]; then
+      tail -n 500 /config/.cytech_boot_events > /config/.cytech_boot_events.tmp 2>/dev/null \
+        && mv /config/.cytech_boot_events.tmp /config/.cytech_boot_events
+    fi
+  fi
+  date +%s >> /config/.cytech_boot_events 2>/dev/null || true
+}
+
+check_boot_storm() {
+  local RESULT
+  RESULT=$(python3 - << 'PYEOF'
+import json
+import os
+import time
+
+F = '/config/.cytech_boot_events'
+O = '/config/.cytech_boot_result'
+now = int(time.time())
+events = []
+if os.path.exists(F):
+    with open(F) as f:
+        for line in f:
+            line = line.strip()
+            if line.isdigit():
+                events.append(int(line))
+recent = [e for e in events if now - e < 86400]
+status = 'OK'
+message = 'no restart storm: %d HA restarts in the last 24h' % len(recent)
+if len(recent) >= 5:
+    status = 'RESTART_STORM'
+    message = ('HA restarted %d times in the last 24h (first %s local). '
+               'Likely a restart loop -- check the card and host journal.') % (
+        len(recent), time.strftime('%H:%M:%S', time.localtime(min(recent))))
+with open(O, 'w') as f:
+    json.dump({'ts': now, 'status': status, 'message': message}, f)
+print(message)
+PYEOF
+)
+  echo "$RESULT"
+}
+
+# v35: email alert credentials. There must be NO SMTP password in the repo
+# or the golden image -- the device keeps it in its existing
+# /config/.cytech_secrets (KEY=VALUE lines, same file as the Tailscale
+# client keys). This ensure feeds HA's secrets.yaml via !secret refs
+# (packages/cytech.yaml's notify: smtp config), preserving any other keys
+# it already holds. No-op unless CY_SMTP_PASS is present.
+ensure_email_secrets() {
+  local RESULT
+  RESULT=$(python3 - << 'PYEOF'
+import os
+import shutil
+
+CFG = '/config/.cytech_secrets'
+SECRETS = '/config/secrets.yaml'
+VALUES = {}
+
+if not os.path.exists(CFG):
+    print("no .cytech_secrets -- skipping email secrets")
+    raise SystemExit(0)
+
+with open(CFG) as f:
+    for line in f:
+        line = line.strip()
+        if line and '=' in line and not line.startswith('#'):
+            k, v = line.split('=', 1)
+            VALUES[k.strip()] = v.strip()
+
+if not VALUES.get('CY_SMTP_PASS'):
+    print("CY_SMTP_PASS not in .cytech_secrets -- email alerts disabled")
+    raise SystemExit(0)
+
+keys = {'cytech_smtp_user': VALUES.get('CY_SMTP_USER', ''),
+        'cytech_smtp_pass': VALUES['CY_SMTP_PASS'],
+        'cytech_smtp_recipient': VALUES.get('CY_SMTP_RECIPIENT', '')}
+
+old = {}
+if os.path.exists(SECRETS):
+    raw = open(SECRETS).read()
+    import yaml
+    try:
+        old = yaml.safe_load(raw) or {}
+    except Exception:
+        print("secrets.yaml unreadable -- not touching it")
+        raise SystemExit(0)
+
+changed = []
+for k, v in keys.items():
+    if old.get(k) != v:
+        changed.append(k)
+if not changed:
+    print("email secrets already up to date -- no change")
+    raise SystemExit(0)
+
+if os.path.exists(SECRETS) and not os.path.exists(SECRETS + '.pre_v35_backup'):
+    shutil.copy(SECRETS, SECRETS + '.pre_v35_backup')
+
+for k, v in keys.items():
+    old[k] = v
+with open(SECRETS, 'w') as f:
+    f.write('\n'.join('%s: %s' % (k, old[k]) for k in sorted(old)) + '\n')
+
+print("email secrets written (keys: %s)" % ', '.join(changed))
+PYEOF
+)
+  echo "$RESULT"
+  if echo "$RESULT" | grep -qE "written"; then
+    echo "Email secrets updated -- restarting HA to load them."
+    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/restart >/dev/null || true
+  fi
+}
+
 # Home Assistant Supervisor's own DNS plugin defaults to Cloudflare over
 # DNS-over-TLS (port 853) whenever no explicit "servers" are configured --
 # fine on networks that allow it, but some corporate/guest/hotel-style
@@ -1137,6 +1256,8 @@ if [ -f /config/.zero_touch_completed ]; then
     exit 0
   fi
   echo "Already initialized. Running maintenance checks..."
+  record_boot_event
+  check_boot_storm
   check_config_integrity
   ensure_resilient_dns
   ensure_yaml_dashboards
@@ -1161,6 +1282,7 @@ if [ -f /config/.zero_touch_completed ]; then
     ensure_register_control_dashboard
     ensure_responses_card
     ensure_comfort_alarm_template
+    ensure_email_secrets
 
     TS_STATE=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
       "docker exec app_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null" \

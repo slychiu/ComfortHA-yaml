@@ -31,6 +31,19 @@
 # via ensure_comfort_alarm_template() in first_boot.sh (see that function
 # and the manifest changelog for detail). Content changes (not just a
 # comment bump) also trip cytech_update.sh's auto-restart trigger.
+# v35: SD-card trouble detection + email alerting (see cytech_check_sdcard.sh
+# and cytech_canary.sh for the scripts; first_boot.sh's record_boot_event /
+# check_boot_storm / ensure_email_secrets for the boot-side pieces). Adds:
+# the two shell_commands below, the three command_line sensors whose state is
+# the result status (OK/FAIL/SKIP for the card checks, OK/RESTART_STORM for
+# boots) with the human-readable detail in their "message" attribute, the
+# input_select choosing where alerts go (Cytech support, the device owner,
+# or both -- two smtp-notify entries cover Cytech/Me independently), and the
+# automations: run both checks on HA start, then email + persistent
+# notification the moment any of the three result sensors turns FAIL or
+# RESTART_STORM. SMTP credentials are never in this repo: they come from the
+# device's own /config/.cytech_secrets and land in /config/secrets.yaml via
+# ensure_email_secrets() (references below use !secret).
 shell_command:
   cytech_check_only: "nohup bash /config/cytech_check_only.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_update: "nohup bash /config/cytech_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"
@@ -51,6 +64,8 @@ shell_command:
   disable_remote_support: "nohup bash /config/disable_remote_support.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_hdmi: "nohup bash /config/cytech_check_hdmi.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_usb: "nohup bash /config/cytech_check_usb.sh </dev/null >> /config/cytech_update.log 2>&1 &"
+  cytech_check_sdcard: "nohup bash /config/cytech_check_sdcard.sh </dev/null >> /config/cytech_sd.log 2>&1 &"
+  cytech_canary: "nohup bash /config/cytech_canary.sh </dev/null >> /config/cytech_sd.log 2>&1 &"
 
 input_boolean:
   remote_support_access:
@@ -62,6 +77,15 @@ input_text:
     name: "Automatic Test Result"
     max: 255
     icon: mdi:clipboard-check-outline
+
+input_select:
+  cytech_alert_destination:
+    name: "SD Alert Destination"
+    icon: mdi:email-alert-outline
+    options:
+      - Cytech
+      - Me
+      - Both
 
 timer:
   remote_support_access:
@@ -145,6 +169,35 @@ command_line:
       json_attributes:
         - message
       scan_interval: 30
+  - sensor:
+      # v35: SD-card health results. State is the status word (OK / FAIL /
+      # SKIP), detail lives in the "message" attribute -- short enough that
+      # the 255-char state cap never bites. The FAIL / RESTART_STORM states
+      # feed the alert automations below. Files are written on every HA start
+      # by cytech_start_health_checks.
+      name: "Cytech SD Card Status"
+      unique_id: cytech_sdcard_result_sensor
+      command: "cat /config/.cytech_sdcard_result 2>/dev/null || echo '{}'"
+      value_template: "{{ value_json.status | default('') }}"
+      json_attributes:
+        - message
+      scan_interval: 60
+  - sensor:
+      name: "Cytech SD Canary"
+      unique_id: cytech_canary_result_sensor
+      command: "cat /config/.cytech_canary_result 2>/dev/null || echo '{}'"
+      value_template: "{{ value_json.status | default('') }}"
+      json_attributes:
+        - message
+      scan_interval: 60
+  - sensor:
+      name: "Cytech Boot Status"
+      unique_id: cytech_boot_result_sensor
+      command: "cat /config/.cytech_boot_result 2>/dev/null || echo '{}'"
+      value_template: "{{ value_json.status | default('') }}"
+      json_attributes:
+        - message
+      scan_interval: 60
 
 automation:
   - id: cytech_show_integrity_alert
@@ -219,6 +272,144 @@ automation:
         target:
           entity_id: input_boolean.remote_support_access
 
+  - id: cytech_start_health_checks
+    alias: "Cytech: Run SD health checks on start"
+    mode: single
+    trigger:
+      - platform: homeassistant
+        event: start
+    action:
+      # Each script fails cleanly to SKIP if the SSH addon isn't up yet or
+      # needed tools are missing, so this never blocks startup.
+      - service: shell_command.cytech_check_sdcard
+      - service: shell_command.cytech_canary
+
+  - id: cytech_alert_sdcard_failed
+    alias: "Cytech: SD card alert"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: sensor.cytech_sdcard_result
+        to: "FAIL"
+    action:
+      - service: persistent_notification.create
+        data:
+          notification_id: cytech_sd_alert
+          title: "SD card problem detected"
+          message: "{{ state_attr('sensor.cytech_sdcard_result', 'message') | default('see sensor') }}"
+      - variables:
+          dest: "{{ states('input_select.cytech_alert_destination') | default('Cytech') }}"
+          msg: "{{ state_attr('sensor.cytech_sdcard_result', 'message') | default('see sensor') }}"
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ dest == 'Cytech' }}"
+            sequence:
+              - service: notify.cytech_alert_support
+                data:
+                  message: "SD card problem: {{ msg }}"
+          - conditions:
+              - condition: template
+                value_template: "{{ dest == 'Me' }}"
+            sequence:
+              - service: notify.cytech_alert_email
+                data:
+                  message: "SD card problem: {{ msg }}"
+          - conditions:
+              - condition: template
+                value_template: "{{ dest == 'Both' }}"
+            sequence:
+              - service: notify.cytech_alert_email
+                data:
+                  message: "SD card problem: {{ msg }}"
+              - service: notify.cytech_alert_support
+                data:
+                  message: "SD card problem: {{ msg }}"
+
+  - id: cytech_alert_canary_failed
+    alias: "Cytech: SD canary alert"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: sensor.cytech_canary_result
+        to: "FAIL"
+    action:
+      - service: persistent_notification.create
+        data:
+          notification_id: cytech_canary_alert
+          title: "SD card write test failed"
+          message: "{{ state_attr('sensor.cytech_canary_result', 'message') | default('see sensor') }}"
+      - variables:
+          dest: "{{ states('input_select.cytech_alert_destination') | default('Cytech') }}"
+          msg: "{{ state_attr('sensor.cytech_canary_result', 'message') | default('see sensor') }}"
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ dest == 'Cytech' }}"
+            sequence:
+              - service: notify.cytech_alert_support
+                data:
+                  message: "SD canary failed: {{ msg }}"
+          - conditions:
+              - condition: template
+                value_template: "{{ dest == 'Me' }}"
+            sequence:
+              - service: notify.cytech_alert_email
+                data:
+                  message: "SD canary failed: {{ msg }}"
+          - conditions:
+              - condition: template
+                value_template: "{{ dest == 'Both' }}"
+            sequence:
+              - service: notify.cytech_alert_email
+                data:
+                  message: "SD canary failed: {{ msg }}"
+              - service: notify.cytech_alert_support
+                data:
+                  message: "SD canary failed: {{ msg }}"
+
+  - id: cytech_alert_boot_storm
+    alias: "Cytech: Restart storm alert"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: sensor.cytech_boot_result
+        to: "RESTART_STORM"
+    action:
+      - service: persistent_notification.create
+        data:
+          notification_id: cytech_boot_alert
+          title: "Restart loop suspected"
+          message: "{{ state_attr('sensor.cytech_boot_result', 'message') | default('see sensor') }}"
+      - variables:
+          dest: "{{ states('input_select.cytech_alert_destination') | default('Cytech') }}"
+          msg: "{{ state_attr('sensor.cytech_boot_result', 'message') | default('see sensor') }}"
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ dest == 'Cytech' }}"
+            sequence:
+              - service: notify.cytech_alert_support
+                data:
+                  message: "Restart loop suspected: {{ msg }}"
+          - conditions:
+              - condition: template
+                value_template: "{{ dest == 'Me' }}"
+            sequence:
+              - service: notify.cytech_alert_email
+                data:
+                  message: "Restart loop suspected: {{ msg }}"
+          - conditions:
+              - condition: template
+                value_template: "{{ dest == 'Both' }}"
+            sequence:
+              - service: notify.cytech_alert_email
+                data:
+                  message: "Restart loop suspected: {{ msg }}"
+              - service: notify.cytech_alert_support
+                data:
+                  message: "Restart loop suspected: {{ msg }}"
+
 # v34: MQTT sensor backing the System Status card in dashboards/alarm.yaml.
 # Reads the raw panel status word from cytech_comfort_mqtt/alarm (the same
 # topic the alarm_control_panel uses) so a Trouble state is visible in HA --
@@ -232,3 +423,28 @@ mqtt:
       availability_topic: "cytech_comfort_mqtt/alarm/online"
       payload_available: "1"
       payload_not_available: "0"
+
+# v35: two smtp notify entries -- both send with the ucmapi@cytech.biz
+# send-only account, one to Cytech support (fixed address), one to the
+# address the device owner chose (in secrets.yaml, default chiu@cytech.biz).
+# credentials are device-local (!secret cytech_smtp_user/pass, written by
+# ensure_email_secrets() from /config/.cytech_secrets -- never in this repo).
+notify:
+  - platform: smtp
+    name: cytech_alert_support
+    server: mail.server282.com
+    port: 465
+    encryption: ssl
+    username: !secret cytech_smtp_user
+    password: !secret cytech_smtp_pass
+    sender: "ucmapi@cytech.biz"
+    recipient: "support@cytech.biz"
+  - platform: smtp
+    name: cytech_alert_email
+    server: mail.server282.com
+    port: 465
+    encryption: ssl
+    username: !secret cytech_smtp_user
+    password: !secret cytech_smtp_pass
+    sender: "ucmapi@cytech.biz"
+    recipient: !secret cytech_smtp_recipient

@@ -78,3 +78,32 @@ views:
         {% else %}
         Currently off.
         {% endif %}
+  - type: grid
+    cards:
+    - type: markdown
+      content: |-
+        ## System Health
+
+        The SD card is checked every start. If a problem is found,
+        an email is sent here as well as a notification on this screen.
+    - type: entities
+      title: SD Card
+      entities:
+      - entity: sensor.cytech_sdcard_result
+        name: Card Errors
+      - entity: sensor.cytech_canary_result
+        name: Write Test
+      - entity: sensor.cytech_boot_result
+        name: Boots
+    - type: entities
+      title: Alerts
+      entities:
+      - entity: input_select.cytech_alert_destination
+      - type: button
+        name: Send Test Email
+        icon: mdi:email-seal-outline
+        tap_action:
+          action: call-service
+          service: notify.cytech_alert_email
+          data:
+            message: Test email from a Cytech system.

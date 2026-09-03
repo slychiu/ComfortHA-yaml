@@ -1,11 +1,23 @@
 #!/bin/bash
-# v37: owner alert-email registration. Stores the owner's email on the device
-# (CY_SMTP_RECIPIENT in /config/.cytech_secrets -- USER/PASS are seeded by the
-# installer; the OWNER supplies only their own address), regenerates the smtp
-# notify package, and sends a registration notice to support@cytech.biz so
-# Cytech learns which unit belongs to which alert address and can contact the
-# owner when an alert fires. Runs in HA Core's container via shell_command
-# with the email as $1.
+# v40: owner alert-email registration, final owner-facing flow. The OWNER
+# supplies only their own address (the "My Email" field -- renamed from
+# "Cytech Alert Email": the address is the owner's, not Cytech's, and the old
+# name read as if it were Cytech's address). Pressing Register:
+#   empty field   -> status "Enter your email first, then press Register."
+#                    NOTHING is sent -- no blank notices in support@cytech.biz
+#   valid address -> ONE mail To: the owner, Cc: support@cytech.biz: the owner
+#                    sees a confirmation in their own inbox and Cytech still
+#                    gets the registration notice (unit + owner address) for
+#                    the unit<->owner registry. A wrong address fails at send
+#                    time with an explicit status, and nothing is stored.
+#   no SMTP creds -> "ask your installer" (the owner can never make the
+#                    system send mail; only installer-seeded credentials can).
+# Every outcome ALSO writes /config/.cytech_register_popup, which the v40
+# automation turns into a screen popup -- Register always has a visible
+# return status, not just the small inline line. CY_SMTP_RECIPIENT is stored
+# in /config/.cytech_secrets (never in this repo; USER/PASS are
+# installer-seeded). Runs in HA Core's container via shell_command with the
+# email as $1.
 #
 # Usage: bash /config/cytech_register_email.sh '<email>'
 #        bash /config/cytech_register_email.sh '<email>' --dry-run
@@ -16,10 +28,10 @@ EMAIL="$1"
 DRY="$2"
 
 # The actual work is a single python run so the secrets file is edited
-# atomically and the registration mail goes out with a properly-framed
-# message. Bash then runs the email package generator (and core restart, if
-# the recipient actually changed) AFTER the mail + state are persisted --
-# never after a restart, which would kill this script mid-flight.
+# atomically and the mail goes out with a properly-framed message. Bash then
+# runs the email package generator (and core restart, if the recipient
+# actually changed) AFTER the mail + state are persisted -- never after a
+# restart, which would kill this script mid-flight.
 OUT=$(python3 - "$EMAIL" "$DRY" << 'PYEOF' 2>&1
 import os
 import re
@@ -32,15 +44,29 @@ EMAIL = sys.argv[1].strip()
 DRY = sys.argv[2] == '--dry-run'
 CFG = '/config/.cytech_secrets'
 REG = '/config/.cytech_registered'
+RESULT = '/config/.cytech_register_result'
+POPUP = '/config/.cytech_register_popup'
 
-def outcome(status, message, result_file=True):
-    # shares the caller's stdout: bash decides what to do from the exit code
-    if result_file and not DRY:
-        with open('/config/.cytech_register_result', 'w') as f:
-            f.write('{"ts": %d, "status": "%s", "message": "%s"}' % (
-                int(time.time()), status, message.replace('\\', '\\\\').replace('"', '\\"')))
+def write_files(status, message):
+    # both files share the shape {ts, status, message}: the popup file backs
+    # the screen popup automation, the result file backs the inline line.
+    data = '{"ts": %d, "status": "%s", "message": "%s"}' % (
+        int(time.time()), status, message.replace('\\', '\\\\').replace('"', '\\"'))
+    for path in (RESULT, POPUP):
+        with open(path, 'w') as f:
+            f.write(data)
+        os.chmod(path, 0o600)
+
+def outcome(status, message):
+    # shares the caller's stdout: bash decides what to do from the exit code.
+    # DRY always exits 4 (no state change, nothing to generate downstream).
+    if not DRY:
+        write_files(status, message)
     print('%s: %s' % (status, message))
-    sys.exit(0 if status == 'OK' or DRY else 2)
+    sys.exit(4 if DRY else (0 if status == 'OK' else 2))
+
+if not EMAIL:
+    outcome('ERROR', 'Enter your email first, then press Register.')
 
 if not re.fullmatch(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", EMAIL):
     outcome('ERROR', 'Email address rejected -- check the spelling, e.g. name@example.com')
@@ -72,7 +98,8 @@ if os.path.exists(REG):
 if DRY:
     print('DRY-RUN: unit=%s creds=OK registered=%r would %s' % (
         UNIT, existing,
-        're-send registration and update recipient to %s' % EMAIL if existing != EMAIL else 'report already-registered'))
+        'email a confirmation to %s (Cytech on copy) and store it' % EMAIL
+        if existing != EMAIL else 'report already-registered'))
     sys.exit(4)
 
 if existing == EMAIL:
@@ -110,20 +137,23 @@ else:
     os.chmod(CFG, 0o600)
     SECRETS_CHANGED = True
 
-# 2. registration notice to Cytech (support@cytech.biz) so the unit<->owner
-# mapping exists before any alert ever fires. Real mail only -- this is what
-# "they must enter their own email, which is sent to our email" means.
+# 2. ONE mail: To the owner, Cc support@cytech.biz -- the owner gets their
+# confirmation (the button visibly does something for them; a wrong address
+# fails HERE, so no silent typos) and Cytech still gets the registration
+# notice (unit + owner address) for the unit<->owner registry.
 msg = EmailMessage()
 msg['From'] = 'ucmapi@cytech.biz'
-msg['To'] = 'support@cytech.biz'
-msg['Subject'] = 'Cytech system email registration: %s' % (UNIT or 'unknown-unit')
+msg['To'] = EMAIL
+msg['Cc'] = 'support@cytech.biz'
+msg['Subject'] = 'Cytech alert email confirmation: %s' % (UNIT or 'unknown-unit')
 msg.set_content(
-    'This is an automated registration notice from a Cytech system.\n'
-    'Unit:      %s\n'
-    'Alert email set by the owner: %s\n\n'
-    'Any SD-card trouble / restart-loop alerts from this system use the email '
-    'address above as the recipient, and this address is how Cytech can reach '
-    'the owner about this unit.' % (UNIT or 'unknown-unit', EMAIL))
+    'This is an automated confirmation from a Cytech system.\n'
+    'System:      %s\n\n'
+    'Alert emails from this system (e.g. SD card trouble, restart loops) '
+    'will be sent to:\n'
+    '%s\n\n'
+    'If you are not the owner of this system, no action is needed -- you can '
+    'ignore this message.' % (UNIT or 'unknown-unit', EMAIL))
 
 send_err = None
 for attempt in (1, 2):
@@ -138,23 +168,17 @@ for attempt in (1, 2):
         time.sleep(3)
 
 if send_err is not None:
-    outcome('ERROR', 'Could not send the registration notice to Cytech '
-                     '(%s) -- press Register again to retry' % type(send_err).__name__)
+    outcome('ERROR', 'Could not send the confirmation to %s (%s) -- check the '
+                     'spelling and press Register again'
+                     % (EMAIL, type(send_err).__name__))
 
 # 3. persist the registered state ONLY after the mail is out
 with open(REG, 'w') as f:
     f.write(EMAIL)
 os.chmod(REG, 0o600)
 
-# 4. success result for the dashboard, then tell bash whether the
-# device-local smtp package must be regenerated (bash restarts last, after
-# everything above is already on disk and mailed).
-with open('/config/.cytech_register_result', 'w') as f:
-    f.write('{"ts": %d, "status": "OK", "message": "Registered with Cytech -- '
-            'alert emails will go to %s"}' % (int(time.time()), EMAIL))
-os.chmod('/config/.cytech_register_result', 0o600)
 print('MAIL-SENT recipient=%s secrets_changed=%s' % (EMAIL, SECRETS_CHANGED))
-sys.exit(0)
+outcome('OK', 'Registered with Cytech -- alert emails go to %s' % EMAIL)
 PYEOF
 )
 RC=$?

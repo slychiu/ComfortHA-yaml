@@ -100,6 +100,7 @@ views:
       entities:
       - entity: input_select.cytech_alert_destination
       - entity: input_text.cytech_alert_recipient
+        name: My Email
       - type: button
         name: Register with Cytech
         icon: mdi:account-sync-outline
@@ -124,3 +125,15 @@ views:
       card:
         type: markdown
         content: '{% set r = state_attr(''sensor.cytech_register_result'', ''message'') | default('''') %}{{ r }}'
+    - type: conditional
+      conditions:
+      - condition: state
+        entity: sensor.cytech_email_configured
+        state: 'yes'
+      - condition: state
+        entity: sensor.cytech_register_result
+        state: ''
+      card:
+        type: markdown
+        content: 'Alert emails are not set up for this system yet -- enter your email in the **My Email** field above and press **Register with Cytech**.'
+

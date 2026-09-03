@@ -166,14 +166,16 @@ if [ "$RC" != "0" ]; then
   exit "$RC"
 fi
 
-# Regenerate the email package only when the recipient actually changed; an
-# unchanged recipient means the live package already matches. The restart
+# ALWAYS run the email package generator now -- it byte-compares, so an
+# unchanged package prints "no change" and never restarts. Gating it on
+# "recipient changed" was wrong: after the installer seeds the credentials
+# (incl. a recipient), a first-time owner press may change NOTHING in the
+# secrets file while the package still has never been generated on this
+# device -- email would silently not work until the next boot. The restart
 # (if any) happens LAST, after the mail and the registered state are on disk.
-if echo "$OUT" | grep -q "secrets_changed=True"; then
-  RESULT=$(python3 /config/cytech_email_gen.py 2>&1)
-  echo "$RESULT" >> /config/cytech_update.log
-  if echo "$RESULT" | grep -qE "written|removed"; then
-    echo "Email package changed -- restarting HA to load it." >> /config/cytech_update.log
-    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/restart >/dev/null || true
-  fi
+RESULT=$(python3 /config/cytech_email_gen.py 2>&1)
+echo "$RESULT" >> /config/cytech_update.log
+if echo "$RESULT" | grep -qE "written|removed"; then
+  echo "Email package changed -- restarting HA to load it." >> /config/cytech_update.log
+  curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/restart >/dev/null || true
 fi

@@ -105,9 +105,9 @@ views:
         icon: mdi:account-sync-outline
         tap_action:
           action: call-service
-          service: automation.trigger
+          service: button.press
           target:
-            entity_id: automation.cytech_register_email
+            entity_id: button.cytech_register_email
       - type: button
         name: Send Test Email
         icon: mdi:email-seal-outline

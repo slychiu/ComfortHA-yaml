@@ -98,6 +98,22 @@ input_text:
     max: 255
     icon: mdi:email-edit-outline
 
+# v37: "Register with Cytech" is a template button so its press action can be
+# the register script with the CURRENT value of the input_text above -- a
+# plain automation.trigger path is out here: this HA release requires the
+# triggers key (a trigger-less automation is disabled at config validation),
+# and a dashboard button's tap_action data is static and cannot template the
+# typed address.
+template:
+  - button:
+      name: "Cytech Register Email"
+      unique_id: cytech_register_email_button
+      icon: mdi:account-sync-outline
+      press:
+        - service: shell_command.cytech_register_email
+          data:
+            email: "{{ states('input_text.cytech_alert_recipient') | trim }}"
+
 input_select:
   cytech_alert_destination:
     name: "SD Alert Destination"
@@ -467,19 +483,6 @@ automation:
                 data:
                   title: "Cytech restart loop alert: {{ unit }}"
                   message: "{{ unit }}: Restart loop suspected: {{ msg }}"
-
-  - id: cytech_register_email
-    alias: "Cytech: Register owner alert email"
-    mode: single
-    # Fired by the "Register with Cytech" button on the Config Files
-    # dashboard (automation.trigger on the entity); reads the address the
-    # owner typed into input_text.cytech_alert_recipient and hands it to the
-    # register script. The script does the real work (secret write, email to
-    # support@cytech.biz, result file), including all validation.
-    action:
-      - service: shell_command.cytech_register_email
-        data:
-          email: "{{ states('input_text.cytech_alert_recipient') | trim }}"
 
 # v34: MQTT sensor backing the System Status card in dashboards/alarm.yaml.
 # Reads the raw panel status word from cytech_comfort_mqtt/alarm (the same

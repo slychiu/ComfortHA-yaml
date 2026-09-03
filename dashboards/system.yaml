@@ -89,11 +89,11 @@ views:
     - type: entities
       title: SD Card
       entities:
-      - entity: sensor.cytech_sdcard_result
+      - entity: sensor.cytech_sd_card_status
         name: Card Errors
-      - entity: sensor.cytech_canary_result
+      - entity: sensor.cytech_sd_canary
         name: Write Test
-      - entity: sensor.cytech_boot_result
+      - entity: sensor.cytech_boot_status
         name: Boots
     - type: entities
       title: Alerts

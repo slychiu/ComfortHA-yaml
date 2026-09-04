@@ -94,8 +94,12 @@ def write_alert(message):
 
 
 def write_status(state_code):
+    # v42e: plain status word only. The v42c format "ok <epoch>" put the check
+    # timestamp on the Config Check dashboard row as an unexplained number
+    # ("ok 1788489150"); the check time is still recorded in the alert JSON
+    # ('ts'). The row reads: ok / restored / error / waiting.
     with open(STATUS, 'w', encoding='utf-8') as f:
-        f.write('%s %d\n' % (state_code, int(time.time())))
+        f.write('%s\n' % state_code)
 
 
 def restart_core():

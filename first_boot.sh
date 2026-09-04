@@ -1085,7 +1085,10 @@ PYEOF
 # appends an epoch to /config/.cytech_boot_events; check_boot_storm then
 # counts events in the last 24h and writes
 # /config/.cytech_boot_result {"ts","status","message"} (status
-# RESTART_STORM when >=5, OK otherwise) for sensor.cytech_boot_result.
+# REPEATED_RESTARTS when >=5, OK otherwise) for sensor.cytech_boot_result.
+# v42e: the old state/message wording ("RESTART_STORM", "restart loop") read
+# as jargon on the dashboard, so the state is REPEATED_RESTARTS with
+# plain-English messages.
 record_boot_event() {
   if [ -f /config/.cytech_boot_events ]; then
     if [ "$(wc -l < /config/.cytech_boot_events)" -gt 500 ]; then
@@ -1115,11 +1118,12 @@ if os.path.exists(F):
                 events.append(int(line))
 recent = [e for e in events if now - e < 86400]
 status = 'OK'
-message = 'no restart storm: %d HA restarts in the last 24h' % len(recent)
+message = 'OK: %d HA restarts in the last 24h' % len(recent)
 if len(recent) >= 5:
-    status = 'RESTART_STORM'
-    message = ('HA restarted %d times in the last 24h (first %s local). '
-               'Likely a restart loop -- check the card and host journal.') % (
+    status = 'REPEATED_RESTARTS'
+    message = ('The unit restarted %d times in the last 24h (first at %s local). '
+               'Repeated restarts usually mean a problem -- please contact '
+               'Cytech Support.') % (
         len(recent), time.strftime('%H:%M:%S', time.localtime(min(recent))))
 with open(O, 'w') as f:
     json.dump({'ts': now, 'status': status, 'message': message}, f)

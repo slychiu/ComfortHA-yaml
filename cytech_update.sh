@@ -53,7 +53,26 @@ fi
 
 CHANGELOG=$(echo "$MANIFEST" | jq -r '.changelog // "No details available"')
 echo "Applying update v${LOCAL_VER} -> v${REMOTE_VER}: ${CHANGELOG}"
-BASE_URL="${CYTECH_MANIFEST_URL%/manifest.json}"
+
+# v42e: raw.githubusercontent.com serves each URL from a CDN that keeps it
+# cached for max-age=300 (5 minutes), keyed by the URL itself (a query string
+# does NOT create a separate entry -- verified 2026-09-04). A device that
+# downloads right after a release can therefore receive the PREVIOUS
+# version's file with no error, then write the new version label -- silently
+# half-updated, and permanently unable to re-apply ("up to date"). That is
+# exactly what v42c did on the bench unit. THE FIX: every release is also
+# git-tagged with its version (this release: tag 42e) and files are
+# downloaded from the tag URL -- a URL no device has ever fetched, so it can
+# never be served from cache. The manifest itself stays on the branch URL
+# (5-minute staleness there is harmless: a stale read just says "up to date"
+# and the next check, one TTL later, is fresh).
+TAG=$(echo "$MANIFEST" | jq -r '.git_tag // ""')
+if [ -n "$TAG" ]; then
+  # manifest URL is .../ComfortHA-yaml/main/manifest.json -> strip to repo root
+  BASE_URL="${CYTECH_MANIFEST_URL%/main/manifest.json}/${TAG}"
+else
+  BASE_URL="${CYTECH_MANIFEST_URL%/manifest.json}"
+fi
 
 # Tracked separately from LOVELACE_CHANGED below (declared later, closer to
 # where it's used) because packages/cytech.yaml holds live HA config

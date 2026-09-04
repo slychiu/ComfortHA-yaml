@@ -228,7 +228,12 @@ command_line:
       # by cytech_integrity_check.py): ok / restored / error / missing /
       # restart_failed. Distinguishes "restored" (recovered + restart fired)
       # from a still-active problem on the System Health dashboard.
-      name: "Cytech Config Check"
+      # v43: NAME is "Cytech Integrity Status" so the entity id is
+      # sensor.cytech_integrity_status -- HA derives entity_id from the NAME
+      # slug, not from unique_id, and v42's name ("Cytech Config Check")
+      # generated sensor.cytech_config_check, leaving the dashboard row
+      # "Entity not found" (the v36 lesson again, caught by the user's screenshot).
+      name: "Cytech Integrity Status"
       unique_id: cytech_integrity_status_sensor
       command: "cat /config/.cytech_integrity_status 2>/dev/null || echo unknown"
       scan_interval: 300

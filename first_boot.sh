@@ -322,6 +322,28 @@ REPAIR_EOF
 
 # Checks for available updates and notifies HA — does NOT auto-apply.
 # User must press "Update Now" or "Skip" on the dashboard.
+# Version ordering with letter revisions: "42a" > "42", "42b" > "42a",
+# "43" > "42z", but "41a" < "42" (a letter fix is not newer than the next
+# full version). A letter suffix marks a FIX revision of the same release --
+# the fleet policy: while a version has not yet been committed to the fleet,
+# fixes keep the same number with a suffix instead of burning a new version
+# per small fix. Non-numeric garbage sorts as 0. Returns 0 iff $1 > $2.
+ver_newer() {
+  local r l rs ls
+  r=$(printf '%s' "$1" | tr -cd '0-9'); r=${r:-0}
+  l=$(printf '%s' "$2" | tr -cd '0-9'); l=${l:-0}
+  if [ "$r" -ne "$l" ] 2>/dev/null; then
+    [ "$r" -gt "$l" ] 2>/dev/null && return 0
+    return 1
+  fi
+  rs=$(printf '%s' "$1" | sed "s/^${r}//")
+  ls=$(printf '%s' "$2" | sed "s/^${l}//")
+  [ "$rs" = "" ] && return 1
+  [ "$ls" = "" ] && return 0
+  [ "$rs" \> "$ls" ] && return 0
+  return 1
+}
+
 # Silently skips if offline or CYTECH_MANIFEST_URL is unset.
 check_and_apply_updates() {
   [ -z "${CYTECH_MANIFEST_URL}" ] && return 0
@@ -338,7 +360,7 @@ check_and_apply_updates() {
   REMOTE_VER=$(echo "$MANIFEST" | jq -r '.version // 0')
   echo "Update check: local=v${LOCAL_VER} remote=v${REMOTE_VER}"
 
-  if [ "$REMOTE_VER" -le "$LOCAL_VER" ] 2>/dev/null; then
+  if ! ver_newer "$REMOTE_VER" "$LOCAL_VER"; then
     echo "Up to date (v${LOCAL_VER})."
     return 0
   fi

@@ -13,6 +13,28 @@ notify() {
   echo "$json" | tee /config/.cytech_notify_pending > /config/.cytech_last_result
 }
 
+# Version ordering with letter revisions: "42a" > "42", "42b" > "42a",
+# "43" > "42z", but "41a" < "42" (a letter fix is not newer than the next
+# full version). A letter suffix marks a FIX revision of the same release --
+# the fleet policy: while a version has not yet been committed to the fleet,
+# fixes keep the same number with a suffix instead of burning a new version
+# per small fix. Non-numeric garbage sorts as 0. Returns 0 iff $1 > $2.
+ver_newer() {
+  local r l rs ls
+  r=$(printf '%s' "$1" | tr -cd '0-9'); r=${r:-0}
+  l=$(printf '%s' "$2" | tr -cd '0-9'); l=${l:-0}
+  if [ "$r" -ne "$l" ] 2>/dev/null; then
+    [ "$r" -gt "$l" ] 2>/dev/null && return 0
+    return 1
+  fi
+  rs=$(printf '%s' "$1" | sed "s/^${r}//")
+  ls=$(printf '%s' "$2" | sed "s/^${l}//")
+  [ "$rs" = "" ] && return 1
+  [ "$ls" = "" ] && return 0
+  [ "$rs" \> "$ls" ] && return 0
+  return 1
+}
+
 LOCAL_VER=$(cat /config/.cytech_version 2>/dev/null || echo 0)
 MANIFEST=$(curl -sf --max-time 10 "${CYTECH_MANIFEST_URL}" 2>/dev/null)
 
@@ -23,7 +45,7 @@ fi
 
 REMOTE_VER=$(echo "$MANIFEST" | jq -r '.version // 0')
 
-if [ "$REMOTE_VER" -le "$LOCAL_VER" ] 2>/dev/null; then
+if ! ver_newer "$REMOTE_VER" "$LOCAL_VER"; then
   notify "Already on the latest version (v${LOCAL_VER})."
   rm -f /config/.cytech_update_pending
   exit 0

@@ -66,7 +66,7 @@ fi
 # version's file with no error, then write the new version label -- silently
 # half-updated, and permanently unable to re-apply ("up to date"). That is
 # exactly what v42c did on the bench unit. THE FIX: every release is also
-# git-tagged with its version (this release: tag 42e) and files are
+# git-tagged with its version (the manifest's git_tag field) and files are
 # downloaded from the tag URL -- a URL no device has ever fetched, so it can
 # never be served from cache. The manifest itself stays on the branch URL
 # (5-minute staleness there is harmless: a stale read just says "up to date"

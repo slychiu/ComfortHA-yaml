@@ -228,13 +228,25 @@ command_line:
       # by cytech_integrity_check.py): ok / restored / error / missing /
       # restart_failed. Distinguishes "restored" (recovered + restart fired)
       # from a still-active problem on the System Health dashboard.
-      # v43: NAME is "Cytech Integrity Status" so the entity id is
-      # sensor.cytech_integrity_status -- HA derives entity_id from the NAME
-      # slug, not from unique_id, and v42's name ("Cytech Config Check")
-      # generated sensor.cytech_config_check, leaving the dashboard row
-      # "Entity not found" (the v36 lesson again, caught by the user's screenshot).
+      # v42a: NAME is "Cytech Integrity Status" so that a FRESH registration
+      # gets entity_id sensor.cytech_integrity_status -- HA derives entity_id
+      # from the NAME slug, not from unique_id, and v42's name ("Cytech Config
+      # Check") generated sensor.cytech_config_check, leaving the dashboard
+      # row "Entity not found" (the v36 lesson, caught twice by the user's
+      # screenshot).
+      # v42b: but the entity_id is PINNED by the entity registry the moment a
+      # unique_id is first seen. v42 registered cytech_integrity_status_sensor
+      # as sensor.cytech_config_check, and renaming the name: in v42a does NOT
+      # move a registered entity_id -- so v42a units that had run v42 still
+      # showed "Entity not found" ("not found again" screenshot). The unique_id
+      # is therefore CHANGED to cytech_integrity_check_status_sensor: a new
+      # unique_id = a fresh registration = entity_id from the current name
+      # slug. Renaming back to some previously-registered id is a per-unit
+      # history hack -- bump the unique_id instead so every unit converges on
+      # the same id. (The now-orphaned sensor.cytech_config_check registry
+      # entry on units that ran v42 is unreferenced and harmless.)
       name: "Cytech Integrity Status"
-      unique_id: cytech_integrity_status_sensor
+      unique_id: cytech_integrity_check_status_sensor
       command: "cat /config/.cytech_integrity_status 2>/dev/null || echo unknown"
       scan_interval: 300
   - sensor:

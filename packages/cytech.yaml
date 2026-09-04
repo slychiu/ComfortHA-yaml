@@ -247,7 +247,11 @@ command_line:
       # entry on units that ran v42 is unreferenced and harmless.)
       name: "Cytech Integrity Status"
       unique_id: cytech_integrity_check_status_sensor
-      command: "cat /config/.cytech_integrity_status 2>/dev/null || echo unknown"
+      # v42c: "waiting" (not "unknown") before the first run ever -- HA's own
+      # "unknown" reads like an error on the dashboard; a brand-new unit shows
+      # "waiting" for the few seconds until the start-triggered check writes
+      # the status file.
+      command: "cat /config/.cytech_integrity_status 2>/dev/null || echo waiting"
       scan_interval: 300
   - sensor:
       # v35: SD-card health results. State is the status word (OK / FAIL /
@@ -344,6 +348,12 @@ automation:
     alias: "Cytech: Check configuration health"
     mode: single
     trigger:
+      # v42c: run right after every core start (boot AND update restarts), so
+      # the System Health row never sits on "waiting"/unknown until the first
+      # 4-hour tick -- on a unit that just pressed Update Now, a mid-session
+      # corruption is repaired minutes after start, not hours later.
+      - platform: homeassistant
+        event: start
       - platform: time_pattern
         hours: 4
     action:

@@ -278,8 +278,16 @@ command_line:
         - message
       scan_interval: 60
   - sensor:
-      name: "Cytech Boot Status"
-      unique_id: cytech_boot_result_sensor
+      # v42f: renamed from 'Cytech Boot Status' -- this row will carry other
+      # warnings in the future, not just boot/restart ones. The unique_id is
+      # bumped (cytech_warning_result_sensor) on purpose: the entity registry
+      # PINNED sensor.cytech_boot_status at first registration, so a rename
+      # alone would keep the old id while the name changed; a bumped
+      # unique_id re-registers every unit fresh as sensor.cytech_warning
+      # (see the v42b note on the Config Check row for the full story). The
+      # on-disk result file stays /config/.cytech_boot_result (internal).
+      name: "Cytech Warning"
+      unique_id: cytech_warning_result_sensor
       command: "cat /config/.cytech_boot_result 2>/dev/null || echo '{}'"
       value_template: "{{ value_json.status | default('') }}"
       json_attributes:
@@ -551,17 +559,17 @@ automation:
     mode: single
     trigger:
       - platform: state
-        entity_id: sensor.cytech_boot_status
+        entity_id: sensor.cytech_warning
         to: "REPEATED_RESTARTS"
     action:
       - service: persistent_notification.create
         data:
           notification_id: cytech_boot_alert
           title: "Repeated restarts detected"
-          message: "{{ state_attr('sensor.cytech_boot_status', 'message') | default('see sensor') }}"
+          message: "{{ state_attr('sensor.cytech_warning', 'message') | default('see sensor') }}"
       - variables:
           unit: "{{ states('sensor.cytech_device_id') }}"
-          msg: "{{ state_attr('sensor.cytech_boot_status', 'message') | default('see sensor') }}"
+          msg: "{{ state_attr('sensor.cytech_warning', 'message') | default('see sensor') }}"
       - service: notify.cytech_alert_support
         data:
           title: "Cytech repeated restarts alert: {{ unit }}"

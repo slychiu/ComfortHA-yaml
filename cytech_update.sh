@@ -52,7 +52,12 @@ if ! ver_newer "$REMOTE_VER" "$LOCAL_VER"; then
 fi
 
 CHANGELOG=$(echo "$MANIFEST" | jq -r '.changelog // "No details available"')
+DETAILS=$(echo "$MANIFEST" | jq -r 'if .details then .details else "" end')
 echo "Applying update v${LOCAL_VER} -> v${REMOTE_VER}: ${CHANGELOG}"
+if [ -n "$DETAILS" ]; then
+  echo "--- Update details (technical, for the install log only):"
+  echo "$DETAILS"
+fi
 
 # v42e: raw.githubusercontent.com serves each URL from a CDN that keeps it
 # cached for max-age=300 (5 minutes), keyed by the URL itself (a query string

@@ -94,8 +94,8 @@ views:
         name: Card Errors
       - entity: sensor.cytech_sd_canary
         name: Write Test
-      - entity: sensor.cytech_boot_status
-        name: Boots
+      - entity: sensor.cytech_warning
+        name: Warnings
       - entity: sensor.cytech_integrity_status
         name: Config Check
     - type: entities

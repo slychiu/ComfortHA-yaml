@@ -35,17 +35,17 @@ data = {
     'notify': [
         {
             'platform': 'smtp', 'name': 'cytech_alert_support',
-            'server': 'mail.server282.com', 'port': 465, 'encryption': 'tls',
+            'server': 'smtp.gmail.com', 'port': 465, 'encryption': 'tls',
             'username': VALUES.get('CY_SMTP_USER', ''),
             'password': PASS,
-            'sender': 'ucmapi@cytech.biz', 'recipient': 'support@cytech.biz',
+            'sender': 'cytechalerts@gmail.com', 'recipient': 'support@cytech.biz',
         },
         {
             'platform': 'smtp', 'name': 'cytech_alert_email',
-            'server': 'mail.server282.com', 'port': 465, 'encryption': 'tls',
+            'server': 'smtp.gmail.com', 'port': 465, 'encryption': 'tls',
             'username': VALUES.get('CY_SMTP_USER', ''),
             'password': PASS,
-            'sender': 'ucmapi@cytech.biz',
+            'sender': 'cytechalerts@gmail.com',
             'recipient': VALUES.get('CY_SMTP_RECIPIENT', ''),
         },
     ],

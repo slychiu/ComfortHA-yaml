@@ -590,7 +590,7 @@ ensure_reset_watcher() {
   fi
 }
 
-# v44: cytech_integrity_check.py (the runtime companion to check_config_integrity
+# 44a: cytech_integrity_check.py (the runtime companion to check_config_integrity
 # above) was only ever invoked from a homeassistant.start-triggered automation
 # living in automations.yaml/configuration.yaml -- but a configuration.yaml
 # broken badly enough to fail parsing is exactly what puts HA Core into Safe

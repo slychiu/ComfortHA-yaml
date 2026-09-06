@@ -1181,6 +1181,110 @@ PYEOF
 # cytech_email.yaml with the two smtp notify platforms as literal values:
 # no creds -> no file -> cytech.yaml always parses. File is byte-compared so
 # unchanged content does not restart HA again; file is chmod 600.
+# 44d: fetches CY_SMTP_USER/CY_SMTP_PASS from a small PRIVATE repo
+# (ComfortHA-secrets, separate from this public one) instead of requiring a
+# one-time manual SSH push per device. Background: the fleet-shared SMTP
+# account moved from mail.server282.com to a Gmail account in 44b, but that
+# credential is device-local (.cytech_secrets, never touched by updates) --
+# with 20-30+ units already in the field and Remote Support Access being
+# owner-toggled and time-limited (not a reliable bulk channel), there is no
+# safe way to mass-distribute the new credential to already-fielded units.
+# This function solves all FUTURE rotations (edit one file in the private
+# repo, every device with the token self-heals on its next maintenance
+# pass) but deliberately does NOT solve bootstrapping the token onto
+# already-fielded devices -- that remains a one-time distribution problem
+# no different in kind from distributing the SMTP password itself, and
+# nothing on an existing device can safely authenticate to a brand new
+# private resource it doesn't already know about. Decision: leave
+# already-fielded devices on the old server282 credential (it keeps
+# working, no urgency to retire it) and migrate them opportunistically --
+# whenever Remote Support Access happens to be enabled for some other real
+# support reason, add CYTECH_SECRETS_TOKEN to that device's
+# .cytech_secrets by hand; this function then takes over automatically.
+# New devices get the token baked in at provisioning instead.
+#
+# Fetched from a PRIVATE repo, not this public one, because a public repo
+# is scraped by credential-harvesting bots within minutes of a commit --
+# the SMTP password must never be publicly readable. The read-only,
+# single-repo, contents-only fine-grained PAT is the only new secret baked
+# into .cytech_secrets; if that token itself leaks, the blast radius is
+# "can read one small JSON file," not "can act as this GitHub account" or
+# "can read the SMTP password" (the token and the password are different
+# secrets, so leaking the token alone still requires a fetch to get
+# anything useful, unlike embedding the password directly).
+#
+# Idempotent and safe to run every maintenance pass: skips entirely (no
+# network call) if CYTECH_SECRETS_TOKEN is absent -- true for the entire
+# fleet as of 2026-09-06; no-ops if the fetched values already match
+# .cytech_secrets (so a normal pass never restarts HA); any fetch failure
+# (offline, token revoked/expired, repo renamed) is logged and skipped,
+# leaving whatever is currently in .cytech_secrets untouched and working.
+ensure_smtp_credential() {
+  local TOKEN RESULT
+  TOKEN=$(grep '^CYTECH_SECRETS_TOKEN=' /config/.cytech_secrets 2>/dev/null | cut -d= -f2-)
+  [ -z "$TOKEN" ] && return 0
+
+  RESULT=$(curl -sf --max-time 10 \
+    -H "Authorization: token $TOKEN" \
+    -H "Accept: application/vnd.github.raw" \
+    "https://api.github.com/repos/slychiu/ComfortHA-secrets/contents/smtp.json" 2>/dev/null)
+  if [ -z "$RESULT" ]; then
+    echo "SMTP credential fetch failed (offline, token issue, or repo unreachable) -- keeping current .cytech_secrets"
+    return 0
+  fi
+
+  SMTP_JSON="$RESULT" python3 - << 'PYEOF'
+import json, os
+
+try:
+    data = json.loads(os.environ['SMTP_JSON'])
+    user = data.get('CY_SMTP_USER', '')
+    passwd = data.get('CY_SMTP_PASS', '')
+except Exception as e:
+    print(f"SMTP credential fetch: malformed response ({e}) -- keeping current .cytech_secrets")
+    raise SystemExit(0)
+
+if not user or not passwd:
+    print("SMTP credential fetch: response missing CY_SMTP_USER/CY_SMTP_PASS -- keeping current .cytech_secrets")
+    raise SystemExit(0)
+
+p = '/config/.cytech_secrets'
+with open(p) as f:
+    lines = f.readlines()
+
+def get_kv(lines, key):
+    for line in lines:
+        if line.strip().startswith(key + '='):
+            return line.strip().split('=', 1)[1]
+    return None
+
+changed = get_kv(lines, 'CY_SMTP_USER') != user or get_kv(lines, 'CY_SMTP_PASS') != passwd
+
+def set_kv(lines, key, value):
+    found = False
+    out = []
+    for line in lines:
+        if line.strip().startswith(key + '='):
+            out.append(f'{key}={value}\n')
+            found = True
+        else:
+            out.append(line)
+    if not found:
+        out.append(f'{key}={value}\n')
+    return out
+
+if changed:
+    lines = set_kv(lines, 'CY_SMTP_USER', user)
+    lines = set_kv(lines, 'CY_SMTP_PASS', passwd)
+    with open(p, 'w') as f:
+        f.writelines(lines)
+    os.chmod(p, 0o600)
+    print("SMTP credential updated from private repo")
+else:
+    print("SMTP credential already up to date")
+PYEOF
+}
+
 ensure_email_secrets() {
   # v37: the generator body moved out of this heredoc into the standalone
   # /config/cytech_email_gen.py -- the same file cytech_register_email.sh
@@ -1369,6 +1473,7 @@ if [ -f /config/.zero_touch_completed ]; then
     ensure_register_control_dashboard
     ensure_responses_card
     ensure_comfort_alarm_template
+    ensure_smtp_credential
     ensure_email_secrets
 
     TS_STATE=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \

@@ -590,6 +590,43 @@ ensure_reset_watcher() {
   fi
 }
 
+# v44: cytech_integrity_check.py (the runtime companion to check_config_integrity
+# above) was only ever invoked from a homeassistant.start-triggered automation
+# living in automations.yaml/configuration.yaml -- but a configuration.yaml
+# broken badly enough to fail parsing is exactly what puts HA Core into Safe
+# Mode, and Safe Mode does not load custom automations. So the ONE case this
+# whole self-heal feature exists for (configuration.yaml too corrupt to load)
+# was exactly the case where nothing ever called the checker -- confirmed live
+# 2026-09-06 on cytech.local: a truncated configuration.yaml left the unit
+# stuck in Safe Mode with no restore, no alert, no email. Same fix pattern as
+# ensure_reset_watcher above: run the checker from an SSH-addon init_command
+# instead, so it fires independently of whether HA Core can even parse
+# configuration.yaml. The addon container has its own /config mount, its own
+# python3+PyYAML (used by check_config_integrity itself), and docker/curl
+# access, so cytech_integrity_check.py runs there exactly as it would from
+# inside HA core.
+ensure_config_integrity_watcher() {
+  local WATCHER_CMD SSH_INFO ALREADY_CURRENT
+  WATCHER_CMD="nohup sh -c 'while true; do python3 /config/cytech_integrity_check.py >> /config/cytech_integrity_watcher.log 2>&1; sleep 300; done' >/config/cytech_integrity_watcher_boot.log 2>&1 &"
+  SSH_INFO=$(curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_ssh/info)
+  ALREADY_CURRENT=$(echo "$SSH_INFO" | jq --arg cmd "$WATCHER_CMD" '.data.options.init_commands // [] | index($cmd) != null')
+  if [ "$ALREADY_CURRENT" != "true" ]; then
+    # Strip out any prior version of the watcher (matched by the stable
+    # substring "cytech_integrity_check.py", present in every version) before
+    # adding the current one -- same reasoning as ensure_reset_watcher: a
+    # plain add-if-missing check would never replace an outdated watcher
+    # already baked into an existing device's SSH addon config.
+    echo "$SSH_INFO" | jq --arg cmd "$WATCHER_CMD" \
+      '.data.options | .init_commands = ((.init_commands // []) | map(select(contains("cytech_integrity_check.py") | not)) + [$cmd]) | {options: .}' \
+      > /tmp/integrity_watcher_opts.json
+    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
+         -d @/tmp/integrity_watcher_opts.json http://supervisor/addons/a0d7b954_ssh/options
+    echo "SSH addon config-integrity watcher init_command added/updated."
+  else
+    echo "SSH addon config-integrity watcher init_command already up to date."
+  fi
+}
+
 # Idempotently ensures the Reset to Default dashboard is registered, and
 # refreshes the Config Files dashboard's markdown card if it's running an
 # older template. Devices create their System dashboard once during initial
@@ -1326,6 +1363,7 @@ if [ -f /config/.zero_touch_completed ]; then
     apply_usb_host_mode_fix
     check_and_apply_updates
     ensure_reset_watcher
+    ensure_config_integrity_watcher
     ensure_reset_dashboard
     ensure_remote_qr
     ensure_register_control_dashboard

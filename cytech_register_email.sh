@@ -24,6 +24,14 @@
 #
 # --dry-run validates and prints the plan but writes/sends nothing (used for
 # pre-deployment testing). This script never prints a credential value.
+#
+# A successful registration is also logged (unit, owner email, firmware
+# version, timestamp) to a Google Sheet via an Apps Script web app, for a
+# fleet-wide running count/list of registered units -- entirely best-effort:
+# needs CY_SHEETS_WEBHOOK_URL + CY_SHEETS_SECRET in .cytech_secrets (installer-
+# seeded, same as the SMTP creds; never in this repo), and any failure here
+# (missing config, offline, endpoint error) never affects the owner-facing
+# outcome of the Register press.
 EMAIL="$1"
 DRY="$2"
 
@@ -142,7 +150,7 @@ else:
 # fails HERE, so no silent typos) and Cytech still gets the registration
 # notice (unit + owner address) for the unit<->owner registry.
 msg = EmailMessage()
-msg['From'] = 'ucmapi@cytech.biz'
+msg['From'] = VALUES['CY_SMTP_USER']
 msg['To'] = EMAIL
 msg['Cc'] = 'support@cytech.biz'
 msg['Subject'] = 'Cytech alert email confirmation: %s' % (UNIT or 'unknown-unit')
@@ -158,7 +166,7 @@ msg.set_content(
 send_err = None
 for attempt in (1, 2):
     try:
-        with smtplib.SMTP_SSL('mail.server282.com', 465, timeout=20) as smtp:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=20) as smtp:
             smtp.login(VALUES['CY_SMTP_USER'], VALUES['CY_SMTP_PASS'])
             smtp.send_message(msg)
         send_err = None
@@ -178,6 +186,34 @@ with open(REG, 'w') as f:
 os.chmod(REG, 0o600)
 
 print('MAIL-SENT recipient=%s secrets_changed=%s' % (EMAIL, SECRETS_CHANGED))
+
+# 4. best-effort fleet registration log (a running count of registered units
+# in a Google Sheet, via an Apps Script web app). Never blocks or fails the
+# registration -- no URL/secret configured, no network, or any error here is
+# silently swallowed; the owner's confirmation mail above is the only outcome
+# that matters to them. Read fresh from .cytech_secrets (VALUES was loaded
+# before the SMTP check above and still has whatever was there then).
+SHEETS_URL = VALUES.get('CY_SHEETS_WEBHOOK_URL')
+SHEETS_SECRET = VALUES.get('CY_SHEETS_SECRET')
+if SHEETS_URL and SHEETS_SECRET:
+    try:
+        import json
+        import urllib.request
+        FW = ''
+        if os.path.exists('/config/.cytech_version'):
+            with open('/config/.cytech_version') as f:
+                FW = f.read().strip()
+        payload = json.dumps({
+            'secret': SHEETS_SECRET, 'unit': UNIT, 'email': EMAIL, 'version': FW,
+        }).encode('utf-8')
+        req = urllib.request.Request(
+            SHEETS_URL, data=payload, method='POST',
+            headers={'Content-Type': 'application/json'})
+        urllib.request.urlopen(req, timeout=10).read()
+        print('SHEETS-LOG-OK')
+    except Exception as e:
+        print('SHEETS-LOG-FAILED: %s' % e)
+
 outcome('OK', 'Registered with Cytech -- alert emails go to %s' % EMAIL)
 PYEOF
 )

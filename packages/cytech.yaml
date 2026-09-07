@@ -606,3 +606,23 @@ mqtt:
 # without SMTP creds into recovery mode: the config failed to parse, the
 # maintenance pass that would have written the secrets could not run, and
 # the device was stuck until the creds were pushed by hand).
+
+# v45: "Send Test Email" used to call notify.cytech_alert_email directly from
+# the dashboard button -- silent on success, so the owner had no way to know
+# whether it actually sent (only a failure, e.g. "action not found", showed
+# any feedback at all). Routing the button through this script instead: on
+# success it creates a persistent notification confirming the send; on
+# failure (service missing, SMTP error) the script call itself errors out
+# exactly as before and the notify step's own failure is what's visible --
+# no failure case is silently reported as a success.
+script:
+  cytech_send_test_email:
+    alias: Cytech Send Test Email
+    sequence:
+      - service: notify.cytech_alert_email
+        data:
+          message: "Test email from a Cytech system."
+      - service: persistent_notification.create
+        data:
+          title: "Test Email"
+          message: "Test email sent -- check your inbox."

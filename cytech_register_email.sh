@@ -237,5 +237,9 @@ RESULT=$(python3 /config/cytech_email_gen.py 2>&1)
 echo "$RESULT" >> /config/cytech_update.log
 if echo "$RESULT" | grep -qE "written|removed"; then
   echo "Email package changed -- restarting HA to load it." >> /config/cytech_update.log
+  # v45: mark this as a planned restart so record_boot_event() (first_boot.sh)
+  # doesn't count it toward Repeated Restarts -- an owner pressing Register is
+  # not an instability signal.
+  touch /config/.cytech_planned_restart 2>/dev/null || true
   curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/restart >/dev/null || true
 fi

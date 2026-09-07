@@ -165,6 +165,10 @@ print('${DEST} updated (previous config backed up to ${DEST}.pre_update_backup)'
 # (the welcome dashboard is YAML-mode now), so every update raised a
 # FileNotFoundError and left the json on disk to re-fail next time.
 if [ "$LOVELACE_CHANGED" = "1" ] || [ "$PACKAGES_CHANGED" = "1" ] || [ "$FIRSTBOOT_CHANGED" = "1" ]; then
+  # v45: mark this as a planned restart so record_boot_event() (first_boot.sh)
+  # doesn't count it toward Repeated Restarts -- an update applying is not an
+  # instability signal.
+  touch /config/.cytech_planned_restart 2>/dev/null || true
   curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
     http://supervisor/core/restart
   echo "HA restarting to apply dashboard/package/first_boot changes..."

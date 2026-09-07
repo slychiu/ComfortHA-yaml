@@ -409,7 +409,7 @@ ensure_packages_configured() {
   if ! grep -q "^homeassistant:" /config/configuration.yaml 2>/dev/null; then
     printf '\nhomeassistant:\n  packages: !include_dir_named packages\n' >> /config/configuration.yaml
     echo "Packages line added to configuration.yaml — restarting HA to load."
-    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/restart || true
+    restart_core_planned
   fi
 }
 
@@ -728,7 +728,7 @@ PYEOF
   echo "$RESULT"
   if echo "$RESULT" | grep -qE "registered|created|refreshed"; then
     echo "Dashboard changes applied — restarting HA to load them."
-    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/restart || true
+    restart_core_planned
   fi
 }
 
@@ -887,7 +887,7 @@ PYEOF
   echo "$RESULT"
   if echo "$RESULT" | grep -qE "registered|created|replaced|renamed"; then
     echo "Register Control dashboard changes applied — restarting HA to load them."
-    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/restart >/dev/null || true
+    restart_core_planned
   fi
 }
 
@@ -991,7 +991,7 @@ PYEOF
   echo "$RESULT"
   if echo "$RESULT" | grep -qE "appended|added|converted"; then
     echo "Responses card changes applied — restarting HA to load them."
-    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/restart >/dev/null || true
+    restart_core_planned
   fi
 }
 
@@ -1114,7 +1114,7 @@ PYEOF
   echo "$RESULT"
   if echo "$RESULT" | grep -qE "added|updated"; then
     echo "Comfort Alarm value_template applied -- restarting HA to load it."
-    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/restart >/dev/null || true
+    restart_core_planned
   fi
 }
 
@@ -1126,7 +1126,22 @@ PYEOF
 # v42e: the old state/message wording ("RESTART_STORM", "restart loop") read
 # as jargon on the dashboard, so the state is REPEATED_RESTARTS with
 # plain-English messages.
+# v45: a routine maintenance/update/register restart used to count identically
+# to a real crash/reboot, so a normal day of updates+registrations (or a
+# testing session) could trip "Repeated restarts -- contact Cytech Support"
+# with nothing actually wrong. restart_core_planned() (below) marks the
+# restart it's about to trigger; record_boot_event() consumes that marker and
+# skips recording -- so only unexplained restarts (real crash loops, bad
+# hardware, an operator's raw core/host restart outside these known paths)
+# count toward the storm threshold. Config self-heal restores are
+# deliberately NOT routed through restart_core_planned() -- repeated
+# corruption is itself a real signal worth keeping in the count.
 record_boot_event() {
+  if [ -f /config/.cytech_planned_restart ]; then
+    rm -f /config/.cytech_planned_restart
+    echo "Planned restart (update/register/maintenance) -- not counted toward Repeated Restarts."
+    return 0
+  fi
   if [ -f /config/.cytech_boot_events ]; then
     if [ "$(wc -l < /config/.cytech_boot_events)" -gt 500 ]; then
       tail -n 500 /config/.cytech_boot_events > /config/.cytech_boot_events.tmp 2>/dev/null \
@@ -1134,6 +1149,11 @@ record_boot_event() {
     fi
   fi
   date +%s >> /config/.cytech_boot_events 2>/dev/null || true
+}
+
+restart_core_planned() {
+  touch /config/.cytech_planned_restart 2>/dev/null || true
+  curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/restart >/dev/null || true
 }
 
 check_boot_storm() {
@@ -1301,7 +1321,7 @@ ensure_email_secrets() {
   echo "$RESULT"
   if echo "$RESULT" | grep -qE "written|removed"; then
     echo "Email package changed -- restarting HA to load it."
-    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/restart >/dev/null || true
+    restart_core_planned
   fi
 }
 
@@ -1453,7 +1473,7 @@ if [ -f /config/.zero_touch_completed ]; then
   ensure_yaml_dashboards
   if [ $? -eq 1 ]; then
     echo "YAML dashboard config changed — restarting HA to load it."
-    curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/restart >/dev/null
+    restart_core_planned
     exit 0
   fi
   if [ -f /config/.ssh/id_rsa ]; then

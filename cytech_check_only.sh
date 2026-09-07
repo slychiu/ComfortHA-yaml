@@ -18,12 +18,16 @@ write_msg() {
   done
 }
 
-# Version ordering with letter revisions: "42a" > "42", "42b" > "42a",
-# "43" > "42z", but "41a" < "42" (a letter fix is not newer than the next
-# full version). A letter suffix marks a FIX revision of the same release --
-# the fleet policy: while a version has not yet been committed to the fleet,
-# fixes keep the same number with a suffix instead of burning a new version
-# per small fix. Non-numeric garbage sorts as 0. Returns 0 iff $1 > $2.
+# Version ordering with letter revisions: "42b" > "42a", "43" > "42z" (handled
+# by the integer branch, unaffected by letters). SAME-BASE bare-vs-lettered
+# ("45" vs "45a"): the bare (letterless) release is always the fleet
+# PROMOTION of that base number's letters once confirmed (see
+# feedback_no_letter_versions) -- so bare always outranks any of its own
+# base's letters, in either comparison direction. v45 fix: the original rule
+# had this backwards ("$rs"="" -> not newer unconditionally), which is why a
+# device already on "45a" reported "45a is the latest version" and refused
+# the real "45" fleet release -- reproduced live 2026-09-07. Non-numeric
+# garbage sorts as 0. Returns 0 iff $1 > $2.
 ver_newer() {
   local r l rs ls
   r=$(printf '%s' "$1" | tr -cd '0-9'); r=${r:-0}
@@ -34,8 +38,9 @@ ver_newer() {
   fi
   rs=$(printf '%s' "$1" | sed "s/^${r}//")
   ls=$(printf '%s' "$2" | sed "s/^${l}//")
-  [ "$rs" = "" ] && return 1
-  [ "$ls" = "" ] && return 0
+  [ "$rs" = "$ls" ] && return 1
+  [ "$rs" = "" ] && return 0
+  [ "$ls" = "" ] && return 1
   [ "$rs" \> "$ls" ] && return 0
   return 1
 }

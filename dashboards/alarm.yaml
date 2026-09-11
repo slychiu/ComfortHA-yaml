@@ -289,23 +289,45 @@ views:
           - entity_id: binary_sensor.comfort_bypass_required
     - type: vertical-stack
       cards:
-      - show_name: true
-        show_icon: true
-        type: button
-        icon: mdi:broom
-        name: Clear
-        tap_action:
-          action: call-service
-          service: input_button.press
-          data:
-            entity_id: input_button.clear_alarm_log
-        card_mod:
-          style: "ha-card {\n  width: 48px;\n  height: 48px;\n  padding: 4px;\n}\n"
+      - type: grid
+        columns: 2
+        square: false
+        cards:
+        - show_name: true
+          show_icon: true
+          type: button
+          icon: mdi:broom
+          name: Clear
+          tap_action:
+            action: call-service
+            service: input_button.press
+            data:
+              entity_id: input_button.clear_alarm_log
+          card_mod:
+            style: "ha-card {\n  height: 48px;\n  padding: 4px;\n}\n"
+        - show_name: true
+          show_icon: true
+          type: button
+          icon: mdi:sort-clock-descending-outline
+          name: Latest first
+          entity: input_boolean.alarm_log_latest_first
+          tap_action:
+            action: perform-action
+            perform_action: input_boolean.toggle
+            target:
+              entity_id: input_boolean.alarm_log_latest_first
+          card_mod:
+            style: "ha-card {\n  height: 48px;\n  padding: 4px;\n}\n"
       - type: markdown
         title: Alarm Message Log
-        content: '{{ state_attr(''sensor.comfort_mqtt_log'', ''log'') or '''' }}
-
-          '
+        content: |-
+          {%- set raw = (state_attr('sensor.comfort_mqtt_log', 'log') or '') | trim -%}
+          {%- set lines = raw.split('\n') if raw else [] -%}
+          {%- if is_state('input_boolean.alarm_log_latest_first', 'on') -%}
+          {{ lines | reverse | join('\n') }}
+          {%- else -%}
+          {{ lines | join('\n') }}
+          {%- endif -%}
         card_mod:
           style: "ha-card {\n  max-height: 320px;\n  overflow-y: auto;\n}\nha-markdown {\n  max-height: 280px;  /* leaves room for title/padding */\n  overflow-y: auto;\n}\n"
     - type: heading

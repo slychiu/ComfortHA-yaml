@@ -115,6 +115,12 @@ input_boolean:
   remote_support_access:
     name: "Remote Support Access"
     icon: mdi:account-key
+  # v47a: order of the Alarm Message Log card on the Comfort Alarm dashboard.
+  # Off (default) = the add-on's own order, oldest first; on = newest first.
+  # A display preference only -- nothing in the bridge or the log itself changes.
+  alarm_log_latest_first:
+    name: "Alarm Log Latest First"
+    icon: mdi:sort-clock-descending-outline
 
 input_text:
   automatic_test_result:

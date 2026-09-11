@@ -98,6 +98,20 @@ views:
         name: Warnings
       - entity: sensor.cytech_integrity_status
         name: Config Check
+    - type: conditional
+      conditions:
+      - condition: state
+        entity: sensor.cytech_warning
+        state: REPEATED_RESTARTS
+      card:
+        type: button
+        name: Dismiss Warning
+        icon: mdi:notification-clear-all
+        tap_action:
+          action: call-service
+          service: persistent_notification.dismiss
+          data:
+            notification_id: cytech_boot_alert
     - type: entities
       title: Alerts
       entities:

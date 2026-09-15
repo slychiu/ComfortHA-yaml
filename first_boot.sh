@@ -1123,6 +1123,189 @@ PYEOF
   fi
 }
 
+# v48a: HA 2026.9 imports the top-level http: block from configuration.yaml
+# into .storage/http and then raises the http/deprecated_yaml repair; from HA
+# 2027.2 leaving the block in place is a startup failure, not a warning. The
+# block has to go -- but ONLY on a device where that import has actually
+# happened, and configuration.yaml cannot be fixed by an update sync
+# (cytech_update.sh deliberately never touches it -- see its exclusion list),
+# so the edit has to happen on the device, here.
+#
+# The only gate is HA's own marker: data.yaml_migration_done in .storage/http.
+# That is per-device truth rather than a version guess -- at the moment HA sets
+# it, the block is inert and .storage/http is authoritative, so removing it
+# cannot change how the device behaves. A unit whose HA has not migrated yet
+# (the 2026.6 fleet image, e.g. ems.local) has no marker and is left completely
+# alone; when its HA does migrate, the very next pass removes the block. There
+# is nothing version-dependent here and nothing to re-ship for those units.
+#
+# The removal is proven, not assumed, in this order:
+#   1. the file must currently parse (tolerant loader -- configuration.yaml
+#      uses !include);
+#   2. the slice about to be deleted must parse to exactly {'http': <the same
+#      value the whole file parsed to>} -- so a boundary that swallowed a
+#      neighbouring key aborts the edit instead of deleting it;
+#   3. the edited text must parse, lose no other top-level key and gain none;
+#   4. after the atomic replace the file is re-read and re-parsed, and the
+#      success word -- the ONLY thing that triggers the restart -- is printed
+#      only if the block is really gone.
+# Step 4 is not belt-and-braces: a pass that restarted without removing the
+# block would restart again on the next pass, forever -- and because that
+# restart goes through restart_core_planned(), record_boot_event() would exempt
+# every one of them and the Repeated Restarts detector would never notice.
+# A one-shot configuration.yaml.pre_v48a_backup is kept for recovery.
+#
+# The v42 snapshot is refreshed right after a successful removal (see the
+# wrapper): the snapshot is only ever written from a file that has just parsed
+# clean, and without the refresh it would still hold the pre-removal file -- so
+# a later corruption restore would put the http: block, the repair and the
+# 2027.2 startup failure straight back.
+#
+# CY_CFG / CY_HTTP_STORAGE overrides are for offline fixture testing only; on
+# the device they are always the real paths (same convention as
+# ensure_comfort_alarm_template's CY_CFG).
+ensure_http_yaml_migrated() {
+  local RESULT
+  RESULT=$(python3 - << 'PYEOF'
+import json
+import os
+import shutil
+import stat
+import yaml
+
+# 4th copy of the tolerant loader (see first_boot.sh's integrity checks and
+# cytech_integrity_check.py) -- duplicated on purpose, like those: this has to
+# keep working on the one file whose loss stops HA booting, so it must not
+# depend on another file having been downloaded alongside it. Keep in sync.
+class TolerantLoader(yaml.SafeLoader):
+    pass
+
+def _construct_any_tag(loader, tag_suffix, node):
+    if isinstance(node, yaml.ScalarNode):
+        return loader.construct_scalar(node)
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node)
+    if isinstance(node, yaml.MappingNode):
+        return loader.construct_mapping(node)
+    return None
+
+TolerantLoader.add_multi_constructor('!', _construct_any_tag)
+
+CFG = os.environ.get('CY_CFG', '/config/configuration.yaml')
+STORE = os.environ.get('CY_HTTP_STORAGE', '/config/.storage/http')
+BACKUP = CFG + '.pre_v48a_backup'
+
+if not os.path.exists(CFG):
+    print("configuration.yaml missing -- no change")
+    raise SystemExit(0)
+
+marker = False
+if os.path.exists(STORE):
+    try:
+        store = json.load(open(STORE))
+    except Exception:
+        store = None
+    if isinstance(store, dict):
+        data = store.get('data') if isinstance(store.get('data'), dict) else {}
+        marker = (data.get('yaml_migration_done') is True
+                  or store.get('yaml_migration_done') is True)
+if not marker:
+    print("http YAML not imported by HA on this device -- no change")
+    raise SystemExit(0)
+
+with open(CFG, encoding='utf-8') as f:
+    text = f.read()
+lines = text.split('\n')
+
+try:
+    old_doc = yaml.load(text, Loader=TolerantLoader)
+except Exception as e:
+    print("configuration.yaml does not parse (%s) -- leaving it to the integrity check"
+          % type(e).__name__)
+    raise SystemExit(0)
+if not isinstance(old_doc, dict) or 'http' not in old_doc:
+    print("no top-level http: block -- no change")
+    raise SystemExit(0)
+
+# 2. The http: line, then the first column-0 content line after it. A column-0
+#    comment ends the slice: comments carry no YAML content, so stopping there
+#    can never orphan anything, and it avoids eating the next section's header.
+start = None
+for i, l in enumerate(lines):
+    if l[:1] in (' ', '\t') or not l.strip() or l.lstrip().startswith('#'):
+        continue
+    if l.rstrip() == 'http:' or l.rstrip().startswith('http: '):
+        start = i
+        break
+if start is None:
+    print("top-level http: key is not a plain line -- skipping")
+    raise SystemExit(0)
+
+end = start + 1
+while end < len(lines) and (not lines[end].strip() or lines[end][:1] in (' ', '\t')):
+    end += 1
+
+# 3. The slice must be exactly the http key, with the value the whole file
+#    parsed to.
+try:
+    slice_doc = yaml.load('\n'.join(lines[start:end]), Loader=TolerantLoader)
+except Exception as e:
+    print("http: block boundary does not parse (%s) -- skipping" % type(e).__name__)
+    raise SystemExit(0)
+if (not isinstance(slice_doc, dict) or set(slice_doc) != {'http'}
+        or slice_doc['http'] != old_doc['http']):
+    print("http: block boundary looks wrong -- skipping")
+    raise SystemExit(0)
+
+new_text = '\n'.join(lines[:start] + lines[end:])
+
+# 4. The result must parse, lose nothing but http:, and gain nothing.
+try:
+    new_doc = yaml.load(new_text, Loader=TolerantLoader)
+except Exception as e:
+    print("edited configuration.yaml does not parse (%s) -- not written" % type(e).__name__)
+    raise SystemExit(0)
+if (not isinstance(new_doc, dict) or set(old_doc) - {'http'} - set(new_doc)
+        or set(new_doc) - set(old_doc)):
+    print("edited configuration.yaml lost or changed sections -- not written")
+    raise SystemExit(0)
+if new_text == text:
+    print("http: block already gone -- no change")
+    raise SystemExit(0)
+if not new_text.endswith('\n'):
+    new_text += '\n'
+
+if not os.path.exists(BACKUP):
+    shutil.copy(CFG, BACKUP)
+
+TMP = CFG + '.tmp'
+with open(TMP, 'w', encoding='utf-8') as f:
+    f.write(new_text)
+os.chmod(TMP, stat.S_IMODE(os.stat(CFG).st_mode))
+os.replace(TMP, CFG)
+
+# 5. Read back what is actually on disk.
+try:
+    with open(CFG, encoding='utf-8') as f:
+        back = yaml.load(f.read(), Loader=TolerantLoader)
+except Exception as e:
+    print("post-write read-back does not parse (%s) -- not restarting" % type(e).__name__)
+    raise SystemExit(0)
+if not isinstance(back, dict) or 'http' in back:
+    print("post-write read-back still shows a top-level http: block -- not restarting")
+    raise SystemExit(0)
+print("http: block removed -- configuration.yaml updated, backup at %s"
+      % os.path.basename(BACKUP))
+PYEOF
+)
+  echo "$RESULT"
+  if echo "$RESULT" | grep -q "http: block removed"; then
+    ensure_config_snapshot
+    echo "http: block removed from configuration.yaml -- restarting HA to clear the repair."
+    restart_core_planned
+  fi
+}
+
 # v35: boot-loop detection. Every first_boot.sh run (i.e. every HA start)
 # appends an epoch to /config/.cytech_boot_events; check_boot_storm then
 # counts events in the last 24h and writes
@@ -1314,9 +1497,14 @@ ensure_email_secrets() {
   # v37: the generator body moved out of this heredoc into the standalone
   # /config/cytech_email_gen.py -- the same file cytech_register_email.sh
   # calls, so there is exactly ONE source of truth for the generated
-  # packages/cytech_email.yaml. Behavior is unchanged: prints one status
-  # line; "written" or "removed" mean the generated file changed and HA
-  # must restart; byte-compare means unchanged content never restarts.
+  # packages/cytech_email.yaml.
+  # v48a: the generator no longer generates anything -- alert mail is sent by
+  # /config/cytech_alert_mail.py now (see packages/cytech.yaml). Its one
+  # remaining job is deleting the legacy package, which is what retires the
+  # two smtp notify services and clears HA's
+  # homeassistant/deprecated_yaml_smtp repair. The contract is unchanged:
+  # prints one status line, "written"/"removed" mean HA must restart, and the
+  # line that reports the deletion contains "removed".
   if [ ! -f /config/cytech_email_gen.py ]; then
     echo "cytech_email_gen.py missing -- email package not checked this pass"
     return 0
@@ -1481,6 +1669,10 @@ if [ -f /config/.zero_touch_completed ]; then
     restart_core_planned
     exit 0
   fi
+  # v48a: deliberately outside the SSH-addon gate below -- clearing the
+  # http/deprecated_yaml repair is a plain file edit that must not depend on
+  # the Advanced SSH addon being reachable.
+  ensure_http_yaml_migrated
   if [ -f /config/.ssh/id_rsa ]; then
     ensure_ssh_admin_access
     # Normally already up well before this point (boot: auto), so this returns

@@ -82,6 +82,21 @@
 # cytech_register_email.sh has always sent the registration confirmation. The
 # wording, the destinations and the v41 owner-copy rule are unchanged; the
 # owner/not-owner decision simply moved out of this YAML and into the sender.
+# v48b: the System Health screen now reports the onboard Ethernet port's link
+# state. /config/cytech_check_eth.sh (new) reads /sys/class/net only --
+# strictly read-only, it never runs `ip link set`/ethtool and never tries to
+# enable or repair the interface -- and writes {"ts","status","message"} to
+# /config/.cytech_eth_result, read by sensor.cytech_ethernet_result (new
+# unique_id; state is the short status word OK/NO_LINK/NO_IFACE, the
+# owner-facing prose is in the message attribute). Automation
+# cytech_check_eth_health runs it at every core start and every 4 h, and the
+# dashboard's Check Network Port button reruns it on demand. DELIBERATELY
+# DISPLAY-ONLY: a dead link sends no email and raises no popup, because the
+# unit that prompted this was reachable only through its USB NIC and mail
+# about a "missing network" on a working unit would be noise. The customer
+# case: a new unit arrived with a dead onboard port (no link LEDs across
+# proven-good switches/cables, NetworkManager refusing activation with
+# "device has no carrier") and nothing on the unit said so.
 shell_command:
   cytech_check_only: "nohup bash /config/cytech_check_only.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_update: "nohup bash /config/cytech_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"
@@ -110,6 +125,9 @@ shell_command:
   disable_remote_support: "nohup bash /config/disable_remote_support.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_hdmi: "nohup bash /config/cytech_check_hdmi.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_usb: "nohup bash /config/cytech_check_usb.sh </dev/null >> /config/cytech_update.log 2>&1 &"
+  # v48b: Ethernet link check (see the note at the top of this file). Read-only
+  # on the network stack -- sysfs reads only, no state change.
+  cytech_check_eth: "nohup bash /config/cytech_check_eth.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_sdcard: "nohup bash /config/cytech_check_sdcard.sh </dev/null >> /config/cytech_sd.log 2>&1 &"
   cytech_canary: "nohup bash /config/cytech_canary.sh </dev/null >> /config/cytech_sd.log 2>&1 &"
   # v37: receives the email via service-call data (shell_command argument
@@ -186,6 +204,18 @@ command_line:
       unique_id: cytech_usb_result_sensor
       command: "cat /config/.cytech_usb_result 2>/dev/null || echo '{}'"
       value_template: "{{ value_json.ts | default('') }}"
+      json_attributes:
+        - message
+      scan_interval: 5
+  - sensor:
+      # v48b: state is the short status word (OK / NO_LINK / NO_IFACE); all the
+      # owner-facing prose lives in the message attribute, so the 255-char
+      # state cap never bites. 5s scan like the HDMI/USB family above, so the
+      # dashboard's Check Network Port button visibly refreshes the row.
+      name: "Cytech Ethernet Result"
+      unique_id: cytech_ethernet_result_sensor
+      command: "cat /config/.cytech_eth_result 2>/dev/null || echo '{}'"
+      value_template: "{{ value_json.status | default('') }}"
       json_attributes:
         - message
       scan_interval: 5
@@ -504,6 +534,21 @@ automation:
       # needed tools are missing, so this never blocks startup.
       - service: shell_command.cytech_check_sdcard
       - service: shell_command.cytech_canary
+
+  - id: cytech_check_eth_health
+    alias: "Cytech: Check Ethernet link"
+    mode: single
+    trigger:
+      # v48b: same shape as the config-health check above -- every core start
+      # (so the row is never stale after an update) and every 4 h while
+      # running. hours: "/4" is divisibility, i.e. genuinely every 4 h; a bare
+      # number here would be an equality match (once a day at that hour).
+      - platform: homeassistant
+        event: start
+      - platform: time_pattern
+        hours: "/4"
+    action:
+      - service: shell_command.cytech_check_eth
 
   - id: cytech_alert_sdcard_failed
     alias: "Cytech: SD card alert"

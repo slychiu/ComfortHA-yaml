@@ -85,9 +85,9 @@ views:
         ## System Health
 
         The system checks itself at every start and every few hours
-        while running, including its SD card, its configuration and its
-        network port. Most problems also send an email and show a
-        notification on this screen.
+        while running, including its SD card, its configuration, its
+        network port and its internet connection. Most problems also
+        send an email and show a notification on this screen.
     - type: entities
       title: SD Card
       entities:
@@ -104,9 +104,13 @@ views:
         ### Network
         {% set s = states('sensor.cytech_ethernet_result') %}
         {% set m = state_attr('sensor.cytech_ethernet_result', 'message') | default('') %}
+        {% set n = state_attr('sensor.cytech_ethernet_result', 'net') | default('') %}
+        {% set nm = state_attr('sensor.cytech_ethernet_result', 'net_message') | default('') %}
         {% if m == '' %}The network port check has not run yet.
         {% elif s == 'OK' %}✅ {{ m }}
         {% else %}⚠️ {{ m }}{% endif %}
+        {% if nm %}{% if n == 'port' or n == 'other' %}✅ {{ nm }}
+        {% else %}⚠️ {{ nm }}{% endif %}{% endif %}
     - type: button
       name: Check Network Port
       icon: mdi:lan-check

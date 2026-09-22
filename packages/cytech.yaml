@@ -97,6 +97,18 @@
 # case: a new unit arrived with a dead onboard port (no link LEDs across
 # proven-good switches/cables, NetworkManager refusing activation with
 # "device has no carrier") and nothing on the unit said so.
+# v50a: the same row now also reports whether the system can actually reach the
+# internet, and through which connection. cytech_check_eth.sh gained a second,
+# independent probe -- outbound TCP connects addressed by IP (no DNS, so a DNS
+# failure can never read as "no internet") -- and writes three more fields:
+# net = "port" (reachable through this Ethernet port; the probe is source-bound
+# to the port's own address), "other" (the system is online through some other
+# connection -- Wi-Fi, a USB network adapter, ... -- named in net_via) or
+# "none"; plus net_message, the owner-facing prose for that line. The dashboard
+# renders one badge per fact, so an owner whose cable is unplugged (or whose
+# port is dead -- the v48b customer case) can see that the system itself is
+# still online, and a lit port with no internet no longer looks like a port
+# problem. Still DELIBERATELY DISPLAY-ONLY: no email, no popup.
 shell_command:
   cytech_check_only: "nohup bash /config/cytech_check_only.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_update: "nohup bash /config/cytech_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"
@@ -125,8 +137,9 @@ shell_command:
   disable_remote_support: "nohup bash /config/disable_remote_support.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_hdmi: "nohup bash /config/cytech_check_hdmi.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_usb: "nohup bash /config/cytech_check_usb.sh </dev/null >> /config/cytech_update.log 2>&1 &"
-  # v48b: Ethernet link check (see the note at the top of this file). Read-only
-  # on the network stack -- sysfs reads only, no state change.
+  # v48b/v50a: Ethernet link + internet-reachability check (see the note at the
+  # top of this file). Read-only on the network stack -- sysfs reads plus
+  # outbound TCP connect probes, no state change on any interface.
   cytech_check_eth: "nohup bash /config/cytech_check_eth.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_sdcard: "nohup bash /config/cytech_check_sdcard.sh </dev/null >> /config/cytech_sd.log 2>&1 &"
   cytech_canary: "nohup bash /config/cytech_canary.sh </dev/null >> /config/cytech_sd.log 2>&1 &"
@@ -214,12 +227,18 @@ command_line:
       # owner-facing prose lives in the message attribute, so the 255-char
       # state cap never bites. 5s scan like the HDMI/USB family above, so the
       # dashboard's Check Network Port button visibly refreshes the row.
+      # v50a: net (port / other / none) and net_message carry the second,
+      # independent fact -- whether the internet is reachable and through what
+      # -- so the dashboard can badge that line on its own. Same unique_id, so
+      # this stays sensor.cytech_ethernet_result; only attributes were added.
       name: "Cytech Ethernet Result"
       unique_id: cytech_ethernet_result_sensor
       command: "cat /config/.cytech_eth_result 2>/dev/null || echo '{}'"
       value_template: "{{ value_json.status | default('') }}"
       json_attributes:
         - message
+        - net
+        - net_message
       scan_interval: 5
   - sensor:
       name: "Cytech Version"

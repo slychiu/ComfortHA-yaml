@@ -14,6 +14,53 @@ fi
 set -x
 echo "Starting Zero-Touch Deployment..."
 
+# Self-heal the update source. A unit whose CYTECH_MANIFEST_URL is not the
+# canonical `main` one cannot update at all: the retired `test` branch would
+# leave it on its old version reporting "up to date" (truthfully, relative to
+# that frozen source) forever, while any other ref -- a release tag left
+# behind by a service visit, a commit SHA, no ref at all -- makes
+# cytech_update.sh build a download base that 404s, so the owner sees "Update
+# failed while downloading ...". Repoint it at `main` once, keeping the
+# original line in a backup so nothing is lost; silent no-op otherwise.
+# Fleet port of the v13 rescue repair, which reached stranded units through
+# the retired `test` branch -- this makes the repair permanent on the main
+# line, for any unit that was left pointed elsewhere or gets left there
+# again. Deliberately never touches a local mirror or another repo. Called
+# here, above the .zero_touch_completed branch, so it also repairs a unit
+# still sealed in its box (which provisions and updates in one pass) and
+# before anything reads the URL. Shares its logic verbatim with
+# cytech_check_only.sh, which repairs at Check for Update instead.
+ensure_manifest_url_current() {
+  local f=/config/.cytech_secrets
+  [ -f "$f" ] || return 0
+  local cur ref
+  cur=$(grep '^CYTECH_MANIFEST_URL=' "$f" | head -n1 | cut -d= -f2-)
+  # tolerate a hand-edited CR, trailing blanks or surrounding quotes
+  cur=$(printf '%s' "$cur" | tr -d '\r' | sed 's/[[:space:]]*$//; s/^"//; s/"$//')
+  # this repo on its real host only -- never a local mirror, never another repo
+  case "$cur" in
+    https://raw.githubusercontent.com/slychiu/ComfortHA-yaml/*) ;;
+    *) return 0 ;;
+  esac
+  ref="${cur#https://raw.githubusercontent.com/slychiu/ComfortHA-yaml/}"
+  case "$ref" in
+    manifest.json) ;;                            # no ref -- default branch
+    */manifest.json)
+      ref="${ref%/manifest.json}"
+      case "$ref" in */*) return 0 ;; esac       # unexpected shape -- leave it
+      if [ "$ref" = main ]; then return 0; fi ;;
+    *) return 0 ;;
+  esac
+  [ -f "${f}.bak_pre_manifest_repair" ] || cp "$f" "${f}.bak_pre_manifest_repair"
+  sed -i 's|^CYTECH_MANIFEST_URL=.*|CYTECH_MANIFEST_URL=https://raw.githubusercontent.com/slychiu/ComfortHA-yaml/main/manifest.json|' "$f"
+  # The file was sourced above, before this rewrite -- refresh the variable too,
+  # so the update check later in this same run already uses the new URL.
+  CYTECH_MANIFEST_URL=$(grep '^CYTECH_MANIFEST_URL=' "$f" | head -n1 | cut -d= -f2-)
+  echo "MANIFEST SELF-HEAL: CYTECH_MANIFEST_URL repointed to ${CYTECH_MANIFEST_URL} (backup: ${f}.bak_pre_manifest_repair)"
+}
+
+ensure_manifest_url_current
+
 apply_discard_fix() {
   printf 'ACTION=="add", KERNEL=="mmcblk0", SUBSYSTEM=="block", ATTR{queue/discard_max_bytes}="0"\n' \
     > /config/.discard_rule.tmp

@@ -63,7 +63,7 @@ views:
 
         Turning this on lets Cytech support connect to this system remotely
         for troubleshooting. It turns itself back off automatically after
-        **1 hour** if you don't turn it off first.
+        **4 hours** if you don't turn it off first.
 
         Contact support@cytech.biz
     - type: entities

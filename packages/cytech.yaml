@@ -188,7 +188,9 @@ template:
 timer:
   remote_support_access:
     name: "Remote Support Access"
-    duration: "01:00:00"
+    # 4 hours -- wide enough to cover the operator picking the toggle up from
+    # another time zone. Keep in step with EXPIRES in enable_remote_support.sh.
+    duration: "04:00:00"
 
 command_line:
   - sensor:

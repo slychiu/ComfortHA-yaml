@@ -1,7 +1,7 @@
 #!/bin/bash
 # Revokes the Cytech operator SSH key. Invoked either by the customer
 # manually flipping the "Remote Support Access" toggle off, or by the
-# 1-hour timer forcing that toggle off (packages/cytech.yaml) -- one
+# 4-hour timer forcing that toggle off (packages/cytech.yaml) -- one
 # authoritative disable path for both cases. Takes effect immediately,
 # same pattern as enable_remote_support.sh.
 exec >> /config/cytech_update.log 2>&1

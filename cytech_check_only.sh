@@ -20,18 +20,39 @@ write_msg() {
 
 LOCAL_VER=$(cat /config/.cytech_version 2>/dev/null || echo 0)
 
-# Rescue (v12, test branch only): a unit whose update source is still the
-# retired `test` branch is frozen at v11 and would forever report "up to date".
+# Rescue (v13, test branch only): a unit whose update source is not the
+# canonical `main` manifest is stuck -- the retired `test` branch would freeze
+# it at v11 and report "up to date" forever, and any other ref (a release tag,
+# a commit SHA) makes every download 404 into "Could not reach update server".
 # Repoint it at `main` before checking, so this very press sees the real latest.
 # Shares its logic with first_boot.sh (which repairs at boot instead).
 ensure_manifest_url_current() {
   local f=/config/.cytech_secrets
   [ -f "$f" ] || return 0
-  grep -q "/ComfortHA-yaml/test/manifest.json" "$f" || return 0
-  cp "$f" "${f}.bak_pre_v12_rescue"
-  sed -i 's#/ComfortHA-yaml/test/manifest.json#/ComfortHA-yaml/main/manifest.json#' "$f"
+  local cur ref
+  cur=$(grep '^CYTECH_MANIFEST_URL=' "$f" | head -n1 | cut -d= -f2-)
+  # tolerate a hand-edited CR, trailing blanks or surrounding quotes
+  cur=$(printf '%s' "$cur" | tr -d '\r' | sed 's/[[:space:]]*$//; s/^"//; s/"$//')
+  # this repo on its real host only -- never a local mirror, never another repo
+  case "$cur" in
+    https://raw.githubusercontent.com/slychiu/ComfortHA-yaml/*) ;;
+    *) return 0 ;;
+  esac
+  ref="${cur#https://raw.githubusercontent.com/slychiu/ComfortHA-yaml/}"
+  case "$ref" in
+    manifest.json) ;;                            # no ref -- default branch
+    */manifest.json)
+      ref="${ref%/manifest.json}"
+      case "$ref" in */*) return 0 ;; esac       # unexpected shape -- leave it
+      if [ "$ref" = main ]; then return 0; fi ;;
+    *) return 0 ;;
+  esac
+  [ -f "${f}.bak_pre_v13_rescue" ] || cp "$f" "${f}.bak_pre_v13_rescue"
+  sed -i 's|^CYTECH_MANIFEST_URL=.*|CYTECH_MANIFEST_URL=https://raw.githubusercontent.com/slychiu/ComfortHA-yaml/main/manifest.json|' "$f"
+  # The file was sourced above, before this rewrite -- refresh the variable too,
+  # so the update check later in this same run already uses the new URL.
   CYTECH_MANIFEST_URL=$(grep '^CYTECH_MANIFEST_URL=' "$f" | head -n1 | cut -d= -f2-)
-  echo "RESCUE v12: CYTECH_MANIFEST_URL repointed to ${CYTECH_MANIFEST_URL} (backup: ${f}.bak_pre_v12_rescue)"
+  echo "RESCUE v13: CYTECH_MANIFEST_URL repointed to ${CYTECH_MANIFEST_URL} (backup: ${f}.bak_pre_v13_rescue)"
 }
 
 ensure_manifest_url_current

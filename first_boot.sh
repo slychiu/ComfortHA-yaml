@@ -14,20 +14,41 @@ fi
 set -x
 echo "Starting Zero-Touch Deployment..."
 
-# Rescue (v12, test branch only). Units imaged before 2026-07-03 carry the
-# retired `test` manifest URL; that branch is frozen at v11, so those units
-# report "up to date (v11)" forever and no update can ever reach them. This
-# repoints them at `main` once. Backup is kept so the change is undoable.
+# Rescue (v13, test branch only). A unit whose CYTECH_MANIFEST_URL is not the
+# canonical `main` one cannot update at all: cytech_update.sh only knows how to
+# turn a URL ending in `/main/manifest.json` into a versioned download base, so
+# any other ref -- the retired `test` branch an old SD image carries, a release
+# tag left behind by a service visit, a commit SHA, no ref at all -- either
+# builds a 404 download URL and reports "Could not reach update server", or
+# (for `test`, frozen at v11) truthfully reports "up to date" forever. Repoint
+# it at `main` once. The original line is kept in a backup so nothing is lost.
 ensure_manifest_url_current() {
   local f=/config/.cytech_secrets
   [ -f "$f" ] || return 0
-  grep -q "/ComfortHA-yaml/test/manifest.json" "$f" || return 0
-  cp "$f" "${f}.bak_pre_v12_rescue"
-  sed -i 's#/ComfortHA-yaml/test/manifest.json#/ComfortHA-yaml/main/manifest.json#' "$f"
+  local cur ref
+  cur=$(grep '^CYTECH_MANIFEST_URL=' "$f" | head -n1 | cut -d= -f2-)
+  # tolerate a hand-edited CR, trailing blanks or surrounding quotes
+  cur=$(printf '%s' "$cur" | tr -d '\r' | sed 's/[[:space:]]*$//; s/^"//; s/"$//')
+  # this repo on its real host only -- never a local mirror, never another repo
+  case "$cur" in
+    https://raw.githubusercontent.com/slychiu/ComfortHA-yaml/*) ;;
+    *) return 0 ;;
+  esac
+  ref="${cur#https://raw.githubusercontent.com/slychiu/ComfortHA-yaml/}"
+  case "$ref" in
+    manifest.json) ;;                            # no ref -- default branch
+    */manifest.json)
+      ref="${ref%/manifest.json}"
+      case "$ref" in */*) return 0 ;; esac       # unexpected shape -- leave it
+      if [ "$ref" = main ]; then return 0; fi ;;
+    *) return 0 ;;
+  esac
+  [ -f "${f}.bak_pre_v13_rescue" ] || cp "$f" "${f}.bak_pre_v13_rescue"
+  sed -i 's|^CYTECH_MANIFEST_URL=.*|CYTECH_MANIFEST_URL=https://raw.githubusercontent.com/slychiu/ComfortHA-yaml/main/manifest.json|' "$f"
   # The file was sourced above, before this rewrite -- refresh the variable too,
   # so the update check later in this same run already uses the new URL.
   CYTECH_MANIFEST_URL=$(grep '^CYTECH_MANIFEST_URL=' "$f" | head -n1 | cut -d= -f2-)
-  echo "RESCUE v12: CYTECH_MANIFEST_URL repointed to ${CYTECH_MANIFEST_URL} (backup: ${f}.bak_pre_v12_rescue)"
+  echo "RESCUE v13: CYTECH_MANIFEST_URL repointed to ${CYTECH_MANIFEST_URL} (backup: ${f}.bak_pre_v13_rescue)"
 }
 
 ensure_manifest_url_current

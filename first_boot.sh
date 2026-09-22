@@ -14,6 +14,24 @@ fi
 set -x
 echo "Starting Zero-Touch Deployment..."
 
+# Rescue (v12, test branch only). Units imaged before 2026-07-03 carry the
+# retired `test` manifest URL; that branch is frozen at v11, so those units
+# report "up to date (v11)" forever and no update can ever reach them. This
+# repoints them at `main` once. Backup is kept so the change is undoable.
+ensure_manifest_url_current() {
+  local f=/config/.cytech_secrets
+  [ -f "$f" ] || return 0
+  grep -q "/ComfortHA-yaml/test/manifest.json" "$f" || return 0
+  cp "$f" "${f}.bak_pre_v12_rescue"
+  sed -i 's#/ComfortHA-yaml/test/manifest.json#/ComfortHA-yaml/main/manifest.json#' "$f"
+  # The file was sourced above, before this rewrite -- refresh the variable too,
+  # so the update check later in this same run already uses the new URL.
+  CYTECH_MANIFEST_URL=$(grep '^CYTECH_MANIFEST_URL=' "$f" | head -n1 | cut -d= -f2-)
+  echo "RESCUE v12: CYTECH_MANIFEST_URL repointed to ${CYTECH_MANIFEST_URL} (backup: ${f}.bak_pre_v12_rescue)"
+}
+
+ensure_manifest_url_current
+
 apply_discard_fix() {
   printf 'ACTION=="add", KERNEL=="mmcblk0", SUBSYSTEM=="block", ATTR{queue/discard_max_bytes}="0"\n' \
     > /config/.discard_rule.tmp

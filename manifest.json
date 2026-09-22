@@ -1,15 +1,10 @@
 {
-  "version": 11,
-  "changelog": "Fixed finish_firstboot.sh stopping its own SSH addon container before finishing its cleanup steps -- it runs *inside* that container, so stopping it could kill the script before it cleared the provisioning SSH key or the Reset to Default debounce flag (.reset_cycle_active), silently leaving both in a bad state. Reordered so cleanup happens before the self-stop, not after.",
+  "version": 12,
+  "changelog": "This unit's update source was still pointing at a retired test address, which is why it showed version 11 and reported it as the latest. It has been repointed at the live update service. Please restart Home Assistant (Settings > System > Restart), then press Check for Update again -- the latest version will be offered.",
+  "details": "test-branch rescue release: repoints CYTECH_MANIFEST_URL from .../ComfortHA-yaml/test/manifest.json to .../main/manifest.json (backup .cytech_secrets.bak_pre_v12_rescue). Ships first_boot.sh (repairs at boot) and cytech_check_only.sh (repairs on Check for Update) so either owner action unblocks the unit. Deliberately no git_tag and no dashboard JSONs: the on-disk update script then falls back to the branch URL, and no Core restart or dashboard write is triggered. Units on /main never see this manifest.",
   "warnings": [],
   "files": [
     "first_boot.sh",
-    "reset.sh",
-    "dev_reset.sh",
-    "cytech_reject_update.sh",
-    "cytech_check_only.sh",
-    "packages/cytech.yaml",
-    "cytech_update.sh",
-    "welcome_dashboard.json"
+    "cytech_check_only.sh"
   ]
 }

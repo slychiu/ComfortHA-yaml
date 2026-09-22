@@ -19,6 +19,23 @@ write_msg() {
 }
 
 LOCAL_VER=$(cat /config/.cytech_version 2>/dev/null || echo 0)
+
+# Rescue (v12, test branch only): a unit whose update source is still the
+# retired `test` branch is frozen at v11 and would forever report "up to date".
+# Repoint it at `main` before checking, so this very press sees the real latest.
+# Shares its logic with first_boot.sh (which repairs at boot instead).
+ensure_manifest_url_current() {
+  local f=/config/.cytech_secrets
+  [ -f "$f" ] || return 0
+  grep -q "/ComfortHA-yaml/test/manifest.json" "$f" || return 0
+  cp "$f" "${f}.bak_pre_v12_rescue"
+  sed -i 's#/ComfortHA-yaml/test/manifest.json#/ComfortHA-yaml/main/manifest.json#' "$f"
+  CYTECH_MANIFEST_URL=$(grep '^CYTECH_MANIFEST_URL=' "$f" | head -n1 | cut -d= -f2-)
+  echo "RESCUE v12: CYTECH_MANIFEST_URL repointed to ${CYTECH_MANIFEST_URL} (backup: ${f}.bak_pre_v12_rescue)"
+}
+
+ensure_manifest_url_current
+
 MANIFEST=$(curl -sf --max-time 10 "${CYTECH_MANIFEST_URL}" 2>/dev/null)
 
 if [ -z "$MANIFEST" ]; then

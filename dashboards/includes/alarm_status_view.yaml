@@ -1,0 +1,47 @@
+# Append this object to the dashboard's views list in /config/dashboards/alarm.yaml.
+title: Alarm & Trouble Status
+path: am-status
+subview: true
+back_path: /comfort-alarm/0
+type: panel
+cards:
+  - type: markdown
+    title: Comfort Alarm & Trouble Status
+    entity_id:
+      - sensor.comfort_am_status
+    content: |-
+      {% set live = is_state('sensor.comfort_am_status', 'online') %}
+      {% set rows = state_attr('sensor.comfort_am_status', 'rows') or [] %}
+      {% if live %}
+      <ha-alert alert-type="success">Monitoring Comfort. This table updates automatically.</ha-alert>
+      {% else %}
+      <ha-alert alert-type="warning">Monitoring unavailable. Current states are unknown; any details below are last observations.</ha-alert>
+      {% endif %}
+
+      **Active / Cleared** is shown where Comfort supplies trouble bits or restore reports. **Event received** records a one-off report, without claiming the alarm is still active. **Unknown** means no reliable current state is available.
+
+      {% if rows %}
+      <table>
+      <thead><tr><th>AM code</th><th>Event</th><th>Triggers HA?</th><th>Current status</th><th>Last observation (UTC)</th><th>Panel details</th></tr></thead>
+      <tbody>
+      {% for row in rows %}
+      {% set status = row.status if live else 'Unknown' %}
+      <tr><td>{{ row.code }}</td><td>{{ row.name | e }}</td><td>{{ 'Yes' if row.triggers else 'No' }}</td><td>{{ {'Active': '🔴 Active', 'Cleared': '🟢 Cleared', 'Event received': '🔵 Event received', 'Unknown': '⚪ Unknown'}.get(status, '⚪ Unknown') }}</td><td>{{ (row.updated or 'Not observed') | replace('T', ' ') | replace('+00:00', '') | e }}</td><td>{{ (row.message or '') | e }}{% if not live and row.updated %}{% if row.message %}<br>{% endif %}Last known: {{ row.last_status | e }}{% endif %}</td></tr>
+      {% endfor %}
+      </tbody>
+      </table>
+      {% else %}
+      Waiting for the updated Comfort add-on to publish AM status.
+      {% endif %}
+
+      Codes are decimal. Undefined codes 11, 16 and 18 are listed; other unknown codes appear if received. “Triggers HA?” describes the reporting policy, not the current state of the alarm panel.
+
+      <details><summary>Observed zones and devices</summary>
+      <p>These are observed AM/AR reports, not a complete inventory. A current trouble bit may report an active category without identifying every affected device.</p>
+      {% for row in rows if row.instances %}
+      <h4>{{ row.code }} — {{ row.name | e }}</h4>
+      {% for parameter, instance in row.instances.items() %}
+      <p>{{ parameter | e }}: {{ instance.message | e }} — {{ (instance.status if live else 'Last known: ' ~ instance.status) | e }}</p>
+      {% endfor %}
+      {% endfor %}
+      </details>

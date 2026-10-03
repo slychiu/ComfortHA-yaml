@@ -943,80 +943,109 @@ PYEOF
   fi
 }
 
-# v34: The bridge addon discovers one button.comfort_* entity per Comfort
+# v51: The bridge addon discovers one button.comfort_* entity per Comfort
 # panel Response key. Since v33 no bundled dashboard is applied on updates
 # anymore (see the v33 changelog), devices that let the addon discover the
 # responses had NO user-facing way to press them until this one-time self-
-# heal adds a Responses card to the Comfort Entities dashboard, using the
-# native button card (no tap_action at all -- button-card v5 drops a plain
-# action-level entity: on the call-service path, which is why the earlier
-# custom-card variants errored out).
+# heal adds a Responses card to the Comfort Entities dashboard. v51 upgrades
+# the tiles: custom:button-card with a name template that strips the
+# "Comfort " prefix, state hidden (a button's state is just a last-press
+# timestamp), tap presses the button via call-service button.press with the
+# entity from the [[[ return entity.entity_id ]]] template -- button-card v5
+# drops a plain action-level entity: this.entity_id on the call-service
+# path, which is why the earlier custom-card variants errored out; hold =
+# more-info. The zone bypass set/clear buttons (button.comfort_*_bypass)
+# are excluded -- they live on the Zone Bypass card and were polluting
+# this list.
 #
 # Rules, mirroring ensure_register_control_dashboard:
 #  * only ever ADD (never replace a whole card, never touch user cards);
-#  * if a Responses card exists but its button include isn't the native
-#    button card, convert just that include (self-heals the legacy variants);
-#  * if a card exists with native buttons already, do nothing;
-#  * gate on at least one button.comfort_* state existing -- on a fresh
-#    install the card is added on a later boot once the addon has
-#    discovered them, rather than rendering an empty card.
+#  * if a Responses card exists, upgrade just the button include (converts
+#    every legacy variant: the v34 native button card and older custom
+#    cards);
+#  * if a card already carries the upgraded tiles, do nothing;
+#  * gate on at least one button.comfort_* entity in the entity registry
+#    FILE -- never on a curl to the Supervisor API: from the context
+#    first_boot runs in, that call is refused (HTTP 401), which made the
+#    v34 curl gate defer silently at every real boot (the card only ever
+#    appeared on units whose dashboard was built by hand). The registry
+#    also fills in as soon as the addon discovers the buttons, so a fresh
+#    unit still gets the card on a later boot rather than an empty list.
 ensure_responses_card() {
   local RESULT
-  if ! curl -sf -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/api/states 2>/dev/null \
-      | grep -q 'button.comfort_'; then
-    echo "No button.comfort_* entities yet -- Responses card deferred until the addon discovers them (runs again next boot)."
+  if ! grep -q '"button\.comfort_' /config/.storage/core.entity_registry 2>/dev/null; then
+    echo "No button.comfort_* entities in the registry yet -- Responses card deferred until the addon discovers them (runs again next boot)."
     return 0
   fi
   RESULT=$(python3 - << 'PYEOF'
 import copy, json, os
 
-sf = '/config/.storage/lovelace.dashboard_zones'
+sf = os.environ.get('CY_DASH', '/config/.storage/lovelace.dashboard_zones')
+
+RESP_OPTS = json.loads('{"type": "custom:button-card", "entity": "this.entity_id", "name": "[[[\\n  let n = entity?.attributes?.friendly_name || entity?.entity_id || \'Response\';\\n  n = n.replace(/^(?:Comfort\\\\s*|button\\\\.comfort_)/i, \'\');\\n  return n;\\n]]]\\n", "show_state": false, "show_icon": true, "styles": {"name": [{"font-size": "11px"}]}, "tap_action": {"action": "call-service", "service": "button.press", "service_data": {"entity_id": "[[[ return entity.entity_id ]]]"}}, "hold_action": {"action": "more-info"}}')
+
 CARD = {
-    "type": "custom:auto-entities",
-    "card": {"type": "grid", "title": "Responses", "columns": 3, "square": False},
-    "card_param": "cards",
-    "sort": {"method": "name"},
-    "filter": {"include": [
-        {"entity_id": "button.comfort_*",
-         "options": {"type": "button", "entity": "this.entity_id"}},
-    ]},
+    'type': 'custom:auto-entities',
+    'card': {'type': 'grid', 'title': 'Responses', 'columns': 3, 'square': False},
+    'card_param': 'cards',
+    'sort': {'method': 'name'},
+    'filter': {
+        'include': [{'entity_id': 'button.comfort_*', 'options': RESP_OPTS}],
+        'exclude': [{'entity_id': 'button.comfort_*_bypass'}],
+    },
 }
 
-if not os.path.exists(sf):
-    print("lovelace.dashboard_zones missing -- nothing to patch")
-    raise SystemExit(0)
-
-doc = json.load(open(sf))
-changed = []
 
 def includes(c):
     return (c.get('filter', {}) or {}).get('include') or []
 
+
 def is_zones(c):
     return c.get('type') == 'custom:auto-entities' and any(
-        i.get('entity_id') == 'binary_sensor.comfort_*' for i in includes(c))
+        isinstance(i, dict) and i.get('entity_id') == 'binary_sensor.comfort_*' for i in includes(c))
+
 
 def is_responses(c):
     return c.get('type') == 'custom:auto-entities' and any(
-        i.get('entity_id') == 'button.comfort_*' for i in includes(c))
+        isinstance(i, dict) and i.get('entity_id') == 'button.comfort_*' for i in includes(c))
+
 
 def patch(cards):
     existing = next((c for c in cards if is_responses(c)), None)
     if existing is None:
         cards.append(copy.deepcopy(CARD))
-        changed.append("appended Responses card with native buttons")
+        changed.append('appended Responses card with press-button tiles')
         return
     inc = includes(existing)
-    if not any(i.get('entity_id') == 'button.comfort_*' for i in inc):
+    btn = next((i for i in inc if isinstance(i, dict) and i.get('entity_id') == 'button.comfort_*'), None)
+    if btn is None:
         inc.append(copy.deepcopy(CARD['filter']['include'][0]))
-        changed.append("added button.comfort_* include to existing Responses card")
-        return
-    for i in inc:
-        if i.get('entity_id') == 'button.comfort_*' and \
-                (i.get('options') or {}).get('type') != 'button':
-            i['options'] = copy.deepcopy(CARD['filter']['include'][0]['options'])
-            changed.append("converted Responses button include to native button card")
-            return
+        changed.append('added button.comfort_* include to existing Responses card')
+    elif btn.get('options') != RESP_OPTS:
+        btn['options'] = copy.deepcopy(RESP_OPTS)
+        changed.append('upgraded Responses tiles (name strip + press + hold)')
+    filt = existing.get('filter')
+    if not isinstance(filt, dict):
+        filt = {}
+        existing['filter'] = filt
+    exc = filt.get('exclude')
+    if exc is None:
+        filt['exclude'] = [{'entity_id': 'button.comfort_*_bypass'}]
+        changed.append('excluded zone bypass buttons from Responses')
+    elif isinstance(exc, list) and not any(
+            isinstance(e, dict) and e.get('entity_id') == 'button.comfort_*_bypass' for e in exc):
+        exc.append({'entity_id': 'button.comfort_*_bypass'})
+        changed.append('excluded zone bypass buttons from Responses')
+
+
+if not os.path.exists(sf):
+    print('lovelace.dashboard_zones missing -- nothing to patch')
+    raise SystemExit(0)
+
+raw = open(sf, encoding='utf-8').read()
+doc = json.loads(raw)
+changed = []
+
 
 def walk(o):
     if isinstance(o, dict):
@@ -1030,19 +1059,295 @@ def walk(o):
         for v in o:
             walk(v)
 
+
 walk(doc)
 
 if not changed:
-    print("Responses card already present with native buttons -- no change")
+    print('Responses card already carries the press tiles -- no change')
 else:
-    open(sf + '.pre_v34_backup', 'w').write(open(sf).read())
-    open(sf, 'w').write(json.dumps(doc))
-    print("; ".join(changed) + " -- written and re-parsed OK")
+    if not os.path.exists(sf + '.pre_v34_backup'):
+        open(sf + '.pre_v34_backup', 'w', encoding='utf-8').write(raw)
+    if not os.path.exists(sf + '.pre_v51_backup'):
+        open(sf + '.pre_v51_backup', 'w', encoding='utf-8').write(raw)
+    open(sf, 'w', encoding='utf-8').write(json.dumps(doc, ensure_ascii=False))
+    print('; '.join(changed) + ' -- written')
 PYEOF
 )
   echo "$RESULT"
-  if echo "$RESULT" | grep -qE "appended|added|converted"; then
+  if echo "$RESULT" | grep -qE "appended|added|converted|upgraded"; then
     echo "Responses card changes applied — restarting HA to load them."
+    restart_core_planned
+  fi
+}
+
+# v51: the Comfort Entities "Zones" card tiles get the same bypass display
+# the alarm.yaml zones grid has carried since the v1.0.11 bundle: a bypassed
+# zone shows "Bypassed" in place of Open/Closed/... plus an orange tint
+# (theme-aware #ffb74d on dark, #e65100 on light) and a 2px dashed border
+# instead of the red/green state colours, and hold-to-toggle -- holding the
+# tile presses the matching button.comfort_<zone>_set/_clear_bypass, while a
+# tap stays more-info (stray-tap safety on a security dashboard).
+#
+# This is a structural patch of the two auto-entities include blocks in the
+# storage JSON: storage dashboards are invisible to file updates, so an
+# ensure is the only way the fleet converges. Rules:
+#  * never touch anything unless every anchor matches the bench-verified
+#    pre-patch shape exactly -- an unrecognised dashboard is left alone,
+#    not half-patched;
+#  * idempotent: already-upgraded options are detected and skipped;
+#  * keeps .pre_v34_backup (state before this file was ever touched) and
+#    .pre_v51_backup (state before this release's changes), each written
+#    once, never overwritten;
+#  * restarts HA when the file changed.
+ensure_zones_card_upgrade() {
+  local RESULT
+  RESULT=$(python3 - << 'PYEOF'
+import copy, json, os
+
+sf = os.environ.get('CY_DASH', '/config/.storage/lovelace.dashboard_zones')
+
+S = json.loads('{"state_display": "\\n  const bfn = (entity.attributes.friendly_name || \'\').toLowerCase().replace(/[^a-z0-9]+/g, \'_\').replace(/^_+|_+$/g, \'\');\\n  const bst = hass.states[\'sensor.\' + bfn + \'_bypass_status\'];\\n  if (bst && (bst.state || \'\').toLowerCase() === \'bypassed\') return \'Bypassed\';\\n  const name = (entity.attributes.friendly_name || \'\').toLowerCase();\\n  if (name.includes(\'light\')) return entity.state === \'on\' ? \'On\' : \'Off\';\\n  if (name.includes(\'tamper\')) return entity.state === \'on\' ? \'Tampered\' : \'Secure\';\\n  if (name.includes(\'panic\')) return entity.state === \'on\' ? \'PANIC\' : \'Normal\';\\n  if (name.includes(\'fire\') || name.includes(\'smoke\')) return entity.state === \'on\' ? \'ALERT\' : \'Normal\';\\n  return entity.state === \'on\' ? \'Open\' : \'Closed\';\\n", "variable_zone_bypassed": " const n = (entity.attributes.friendly_name || \'\').toLowerCase().replace(/[^a-z0-9]+/g, \'_\').replace(/^_+|_+$/g, \'\'); const s = n && hass.states[\'sensor.\' + n + \'_bypass_status\']; return !!s && (s.state || \'\').toLowerCase() === \'bypassed\'; ", "variable_bypass_color": " return (hass.themes && hass.themes.darkMode) ? \'#ffb74d\' : \'#e65100\'; ", "hold_entity_id": " const n = (entity.attributes.friendly_name || \'\').toLowerCase().replace(/[^a-z0-9]+/g, \'_\').replace(/^_+|_+$/g, \'\'); return n ? (\'button.\' + n + (variables.zone_bypassed ? \'_clear_bypass\' : \'_set_bypass\')) : \'\'; ", "on_card_border": " return variables.zone_bypassed ? \'2px dashed \' + variables.bypass_color : \'4px solid var(--warning-color)\'; ", "on_icon_color": " return variables.zone_bypassed ? variables.bypass_color : \'red\'; ", "on_name_color": " return variables.zone_bypassed ? variables.bypass_color : \'red\'; ", "on_state_color": " return variables.zone_bypassed ? variables.bypass_color : \'red\'; ", "off_card_border": " return variables.zone_bypassed ? \'2px dashed \' + variables.bypass_color : \'1px solid var(--divider-color)\'; ", "off_icon_color": " return variables.zone_bypassed ? variables.bypass_color : \'green\'; ", "off_name_color": " return variables.zone_bypassed ? variables.bypass_color : \'inherit\'; ", "off_state_color": " return variables.zone_bypassed ? variables.bypass_color : \'inherit\'; "}')
+
+OLD_SD = "[[[\n  const name = (entity.attributes.friendly_name || '').toLowerCase();\n  if (name.includes('light')) return entity.state === 'on' ? 'On' : 'Off';\n  if (name.includes('tamper')) return entity.state === 'on' ? 'Tampered' : 'Secure';\n  if (name.includes('panic')) return entity.state === 'on' ? 'PANIC' : 'Normal';\n  if (name.includes('fire') || name.includes('smoke')) return entity.state === 'on' ? 'ALERT' : 'Normal';\n  return entity.state === 'on' ? 'Open' : 'Closed';\n]]]\n"
+
+
+def W(body):
+    return '[[' + '[' + body + ']]]'
+
+
+def includes(c):
+    return (c.get('filter', {}) or {}).get('include') or []
+
+
+def is_zones(c):
+    return c.get('type') == 'custom:auto-entities' and any(
+        isinstance(i, dict) and i.get('entity_id') == 'binary_sensor.comfort_*' for i in includes(c))
+
+
+def try_upgrade(o):
+    """Upgrade one include block's options in place; True if it changed.
+
+    Every anchor must match the bench-verified pre-patch shape exactly --
+    anything unrecognised (user edits, a future redesign) is left alone,
+    never half-patched.
+    """
+    if not isinstance(o, dict):
+        return False
+    if o.get('type') != 'custom:button-card':
+        return False
+    if o.get('triggers_update') == 'all' and isinstance(o.get('variables'), dict) \
+            and 'zone_bypassed' in o['variables']:
+        return False  # already upgraded
+    if o.get('entity') != 'this.entity_id':
+        return False
+    name = o.get('name')
+    if not (isinstance(name, str) and 'Zone' in name and 'replace(/^Comfort' in name):
+        return False
+    icon = o.get('icon')
+    if not (isinstance(icon, str) and icon.startswith('[[[') and 'mdi:shield' in icon):
+        return False
+    if o.get('show_state') is not True or o.get('show_icon') is not True:
+        return False
+    if o.get('tap_action') != {'action': 'more-info'}:
+        return False
+    if o.get('hold_action') != {'action': 'more-info'}:
+        return False
+    if 'triggers_update' in o or 'variables' in o:
+        return False
+    if o.get('state_display') != OLD_SD:
+        return False
+    state = o.get('state')
+    if not isinstance(state, list):
+        return False
+    on = next((x for x in state if isinstance(x, dict) and x.get('value') == 'on'), None)
+    off = next((x for x in state if isinstance(x, dict) and x.get('value') == 'off'), None)
+    if on is None or off is None:
+        return False
+    so, sff = on.get('styles'), off.get('styles')
+    if not isinstance(so, dict) or not isinstance(sff, dict):
+        return False
+    if so.get('card') != [{'border': '4px solid var(--warning-color)'}]:
+        return False
+    if so.get('icon') != [{'color': 'red'}]:
+        return False
+    if so.get('name') != [{'color': 'red'}, {'font-weight': 'bold'}, {'font-size': '11px'}]:
+        return False
+    if so.get('state') != [{'color': 'red'}, {'font-size': '10px'}]:
+        return False
+    if sff.get('card') != [{'border': '1px solid var(--divider-color)'}]:
+        return False
+    if sff.get('icon') != [{'color': 'green'}]:
+        return False
+    if sff.get('name') != [{'font-size': '11px'}]:
+        return False
+    if sff.get('state') != [{'font-size': '10px'}]:
+        return False
+    # all anchors matched -- apply (same order as the bench-verified patch)
+    o['triggers_update'] = 'all'
+    o['variables'] = {
+        'zone_bypassed': W(S['variable_zone_bypassed']),
+        'bypass_color': W(S['variable_bypass_color']),
+    }
+    o['state_display'] = '[[[' + S['state_display'] + ']]]\n'
+    o['hold_action'] = {
+        'action': 'call-service',
+        'service': 'button.press',
+        'service_data': {'entity_id': W(S['hold_entity_id'])},
+    }
+    so['card'] = [{'border': W(S['on_card_border'])}]
+    so['icon'] = [{'color': W(S['on_icon_color'])}]
+    so['name'] = [{'color': W(S['on_name_color'])}, {'font-weight': 'bold'}, {'font-size': '11px'}]
+    so['state'] = [{'color': W(S['on_state_color'])}, {'font-size': '10px'}]
+    sff['card'] = [{'border': W(S['off_card_border'])}]
+    sff['icon'] = [{'color': W(S['off_icon_color'])}]
+    sff['name'] = [{'color': W(S['off_name_color'])}, {'font-size': '11px'}]
+    sff['state'] = [{'color': W(S['off_state_color'])}, {'font-size': '10px'}]
+    return True
+
+
+if not os.path.exists(sf):
+    print('lovelace.dashboard_zones missing -- nothing to patch')
+    raise SystemExit(0)
+
+raw = open(sf, encoding='utf-8').read()
+doc = json.loads(raw)
+changed = []
+
+
+def patch(cards):
+    for c in cards:
+        if not (isinstance(c, dict) and is_zones(c)):
+            continue
+        for i in includes(c):
+            if not isinstance(i, dict):
+                continue
+            eid = i.get('entity_id')
+            if not (isinstance(eid, str) and eid.startswith('binary_sensor.')):
+                continue
+            if try_upgrade(i.get('options')):
+                changed.append('upgraded Zones tiles (Bypassed/orange/hold-toggle): ' + eid)
+
+
+def walk(o):
+    if isinstance(o, dict):
+        cards = o.get('cards')
+        if isinstance(cards, list) and any(isinstance(c, dict) and is_zones(c) for c in cards):
+            patch(cards)
+            return
+        for v in o.values():
+            walk(v)
+    elif isinstance(o, list):
+        for v in o:
+            walk(v)
+
+
+walk(doc)
+
+if not changed:
+    print('Zones card already carries the bypass styling -- no change')
+else:
+    if not os.path.exists(sf + '.pre_v34_backup'):
+        open(sf + '.pre_v34_backup', 'w', encoding='utf-8').write(raw)
+    if not os.path.exists(sf + '.pre_v51_backup'):
+        open(sf + '.pre_v51_backup', 'w', encoding='utf-8').write(raw)
+    open(sf, 'w', encoding='utf-8').write(json.dumps(doc, ensure_ascii=False))
+    print('; '.join(changed) + ' -- written')
+PYEOF
+)
+  echo "$RESULT"
+  if echo "$RESULT" | grep -qE "upgraded"; then
+    echo "Zones card upgrade applied — restarting HA to load it."
+    restart_core_planned
+  fi
+}
+
+# v51: one row per bypassable zone on the Comfort Entities dashboard: the
+# zone name, "Bypassed"/"Not bypassed", and Set/Clear buttons that press
+# button.comfort_<zone>_(set|clear)_bypass. Rendered server-side by
+# auto-entities from a Jinja template over the addon's bypass status
+# sensors, so it self-populates for whatever was discovered and hides
+# zones whose name is still the "ZoneNN" placeholder (matching the Comfort
+# Alarm dashboard's filter).
+#
+# Rules: append-only (never replaces the stack, never touches user cards);
+# gate on the entity registry listing bypass buttons for this unit (files,
+# not a curl -- see ensure_responses_card); silent no-op once present;
+# restarts HA when the card was added.
+ensure_zone_bypass_card() {
+  local RESULT
+  if ! grep -q 'button\.comfort_.*_bypass' /config/.storage/core.entity_registry 2>/dev/null; then
+    echo "No zone bypass buttons in the registry yet -- Zone Bypass card deferred until the addon discovers them (runs again next boot)."
+    return 0
+  fi
+  RESULT=$(python3 - << 'PYEOF'
+import copy, json, os
+
+sf = os.environ.get('CY_DASH', '/config/.storage/lovelace.dashboard_zones')
+
+CARD = json.loads('{"type": "custom:auto-entities", "card": {"type": "grid", "title": "Zone Bypass", "columns": 1, "square": false}, "card_param": "cards", "show_empty": true, "filter": {"template": "{% set ns = namespace(cards=[]) %}\\n{% for s in states.sensor | sort(attribute=\'name\') %}\\n  {% if s.entity_id is match(\'^sensor[.]comfort_.*_bypass_status$\') %}\\n    {% set base = \'button.\' ~ s.entity_id[7:-14] %}\\n    {% set title = (s.attributes.friendly_name | default(s.entity_id, true))\\n      | regex_replace(\'(?i)^comfort\\\\s+\', \'\')\\n      | regex_replace(\'(?i)\\\\s+bypass status$\', \'\') %}\\n    {% if not (title is match(\'(?i)^(comfort\\\\s*)?zone\')) %}\\n    {% set ns.cards = ns.cards + [{\\n      \'type\': \'custom:button-card\',\\n      \'entity\': s.entity_id,\\n      \'name\': title,\\n      \'show_icon\': false,\\n      \'show_state\': true,\\n      \'tap_action\': {\'action\': \'more-info\'},\\n      \'hold_action\': {\'action\': \'none\'},\\n      \'styles\': {\\n        \'grid\': [\\n          {\'grid-template-areas\': \'\\"n s set clear\\"\'},\\n          {\'grid-template-columns\': \'minmax(0, 1fr) 82px 40px 40px\'},\\n          {\'column-gap\': \'4px\'},\\n          {\'align-items\': \'center\'}\\n        ],\\n        \'card\': [\\n          {\'padding\': \'6px 8px\'},\\n          {\'min-height\': \'56px\'},\\n          {\'border-radius\': \'10px\'}\\n        ],\\n        \'name\': [\\n          {\'justify-self\': \'start\'},\\n          {\'text-align\': \'left\'},\\n          {\'white-space\': \'normal\'},\\n          {\'overflow-wrap\': \'anywhere\'},\\n          {\'text-overflow\': \'clip\'},\\n          {\'font-size\': \'14px\'},\\n          {\'font-weight\': \'500\'}\\n        ],\\n        \'state\': [\\n          {\'white-space\': \'normal\'},\\n          {\'font-size\': \'12px\'},\\n          {\'text-align\': \'center\'}\\n        ]\\n      },\\n      \'state\': [\\n        {\\n          \'value\': \'Bypassed\',\\n          \'styles\': {\\n            \'state\': [\\n              {\'color\': \'var(--warning-color)\'},\\n              {\'font-weight\': \'bold\'}\\n            ]\\n          }\\n        },\\n        {\\n          \'value\': \'unknown\',\\n          \'styles\': {\\n            \'state\': [{\'color\': \'var(--secondary-text-color)\'}]\\n          }\\n        },\\n        {\\n          \'value\': \'unavailable\',\\n          \'styles\': {\\n            \'state\': [{\'color\': \'var(--secondary-text-color)\'}]\\n          }\\n        }\\n      ],\\n      \'custom_fields\': {\\n        \'set\': {\\n          \'card\': {\\n            \'type\': \'custom:button-card\',\\n            \'entity\': base ~ \'_set_bypass\',\\n            \'name\': \'Set\',\\n            \'icon\': \'mdi:shield-off-outline\',\\n            \'show_name\': true,\\n            \'show_state\': false,\\n            \'tap_action\': {\\n              \'action\': \'call-service\',\\n              \'service\': \'button.press\',\\n              \'service_data\': {\\n                \'entity_id\': base ~ \'_set_bypass\'\\n              }\\n            },\\n            \'hold_action\': {\'action\': \'none\'},\\n            \'double_tap_action\': {\'action\': \'none\'},\\n            \'styles\': {\\n              \'card\': [\\n                {\'width\': \'40px\'},\\n                {\'height\': \'44px\'},\\n                {\'padding\': \'2px\'},\\n                {\'box-shadow\': \'none\'},\\n                {\'border\': \'none\'},\\n                {\'background\': \'transparent\'}\\n              ],\\n              \'icon\': [\\n                {\'width\': \'20px\'},\\n                {\'color\': \'var(--primary-color)\'}\\n              ],\\n              \'name\': [{\'font-size\': \'10px\'}]\\n            }\\n          }\\n        },\\n        \'clear\': {\\n          \'card\': {\\n            \'type\': \'custom:button-card\',\\n            \'entity\': base ~ \'_clear_bypass\',\\n            \'name\': \'Clear\',\\n            \'icon\': \'mdi:shield-check-outline\',\\n            \'show_name\': true,\\n            \'show_state\': false,\\n            \'tap_action\': {\\n              \'action\': \'call-service\',\\n              \'service\': \'button.press\',\\n              \'service_data\': {\\n                \'entity_id\': base ~ \'_clear_bypass\'\\n              }\\n            },\\n            \'hold_action\': {\'action\': \'none\'},\\n            \'double_tap_action\': {\'action\': \'none\'},\\n            \'styles\': {\\n              \'card\': [\\n                {\'width\': \'40px\'},\\n                {\'height\': \'44px\'},\\n                {\'padding\': \'2px\'},\\n                {\'box-shadow\': \'none\'},\\n                {\'border\': \'none\'},\\n                {\'background\': \'transparent\'}\\n              ],\\n              \'icon\': [\\n                {\'width\': \'20px\'},\\n                {\'color\': \'var(--primary-color)\'}\\n              ],\\n              \'name\': [{\'font-size\': \'10px\'}]\\n            }\\n          }\\n        }\\n      }\\n    }] %}\\n    {% endif %}\\n  {% endif %}\\n{% endfor %}\\n{{ ns.cards }}\\n"}}')
+
+
+def includes(c):
+    return (c.get('filter', {}) or {}).get('include') or []
+
+
+def is_zones(c):
+    return c.get('type') == 'custom:auto-entities' and any(
+        isinstance(i, dict) and i.get('entity_id') == 'binary_sensor.comfort_*' for i in includes(c))
+
+
+def is_zone_bypass(c):
+    if not isinstance(c, dict) or c.get('type') != 'custom:auto-entities':
+        return False
+    f = c.get('filter')
+    return isinstance(f, dict) and '_bypass_status' in (f.get('template') or '')
+
+
+def patch(cards):
+    if any(isinstance(c, dict) and is_zone_bypass(c) for c in cards):
+        return
+    cards.append(copy.deepcopy(CARD))
+    changed.append('appended Zone Bypass card')
+
+
+if not os.path.exists(sf):
+    print('lovelace.dashboard_zones missing -- nothing to patch')
+    raise SystemExit(0)
+
+raw = open(sf, encoding='utf-8').read()
+doc = json.loads(raw)
+changed = []
+
+
+def walk(o):
+    if isinstance(o, dict):
+        cards = o.get('cards')
+        if isinstance(cards, list) and any(isinstance(c, dict) and is_zones(c) for c in cards):
+            patch(cards)
+            return
+        for v in o.values():
+            walk(v)
+    elif isinstance(o, list):
+        for v in o:
+            walk(v)
+
+
+walk(doc)
+
+if not changed:
+    print('Zone Bypass card already present -- no change')
+else:
+    if not os.path.exists(sf + '.pre_v34_backup'):
+        open(sf + '.pre_v34_backup', 'w', encoding='utf-8').write(raw)
+    if not os.path.exists(sf + '.pre_v51_backup'):
+        open(sf + '.pre_v51_backup', 'w', encoding='utf-8').write(raw)
+    open(sf, 'w', encoding='utf-8').write(json.dumps(doc, ensure_ascii=False))
+    print('; '.join(changed) + ' -- written')
+PYEOF
+)
+  echo "$RESULT"
+  if echo "$RESULT" | grep -qE "appended"; then
+    echo "Zone Bypass card added — restarting HA to load it."
     restart_core_planned
   fi
 }
@@ -1736,6 +2041,8 @@ if [ -f /config/.zero_touch_completed ]; then
     ensure_remote_qr
     ensure_register_control_dashboard
     ensure_responses_card
+    ensure_zones_card_upgrade
+    ensure_zone_bypass_card
     ensure_comfort_alarm_template
     ensure_smtp_credential
     ensure_email_secrets

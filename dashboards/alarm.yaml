@@ -44,36 +44,6 @@ views:
               service: script.turn_on
               target:
                 entity_id: script.comfort_arm_home
-      - type: horizontal-stack
-        cards:
-        - type: markdown
-          content: |-
-            {% set status = states('sensor.comfort_system_status') %}{% if status == 'Trouble' %}Status: **<span style="color:red">Trouble</span>**
-            {% elif status == 'Alarm' %}Status: **<span style="color:red">Alarm</span>**
-            {% elif status == 'Alert' %}Status: **<span style="color:orange">Alert</span>**
-            {% elif status == 'Idle' %}Status: **Normal**
-            {% else %}Status: **{{ status | replace('_', ' ') | title }}**{% endif %}
-          card_mod:
-            style: |
-              ha-card {
-                padding: 4px 6px;
-              }
-        - type: button
-          icon: mdi:refresh
-          show_name: false
-          show_state: false
-          tap_action:
-            action: perform-action
-            perform_action: button.press
-            target:
-              entity_id: button.cytech_comfort_mqtt_refresh
-          card_mod:
-            style: |
-              ha-card {
-                width: 48px;
-                min-width: 48px;
-                margin-left: auto;
-              }
     - type: grid
       title: Keypad
       columns: 3
@@ -201,9 +171,9 @@ views:
         style: "ha-card {\n  --grid-card-gap: 6px;\n}\n/* Force row height */\n#root {\n  grid-auto-rows: 60px !important;\n}\n"
     - type: markdown
       title: Comfort Message
-      content: '{{ states(''input_text.comfort_alarm_message'') }}
-
-        '
+      content: '{{ states(''input_text.comfort_alarm_message'') }}'
+    - !include includes/alarm_status_button.yaml
+    
   - type: grid
     cards:
     - type: vertical-stack
@@ -222,64 +192,86 @@ views:
               type: custom:button-card
               show_state: true
               show_icon: true
-              state_display: "[[[\n  const name = (entity.attributes.friendly_name || '').toLowerCase();\n  if (name.includes('light')) return entity.state === 'on' ? 'On' : 'Off';\n  if (name.includes('tamper')) return entity.state === 'on' ? 'Tampered' : 'Secure';\n  if (name.includes('panic')) return entity.state === 'on' ? 'PANIC' : 'Normal';\n  if (name.includes('fire') || name.includes('smoke')) return entity.state === 'on' ? 'ALERT' : 'Normal';\n  return entity.state === 'on' ? 'Open' : 'Closed';\n]]]\n"
+              triggers_update: all
+              variables:
+                zone_bypassed: "[[[ const n = (entity.attributes.friendly_name || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, ''); const s = n && hass.states['sensor.' + n + '_bypass_status']; return !!s && (s.state || '').toLowerCase() === 'bypassed'; ]]]"
+                bypass_color: "[[[ return (hass.themes && hass.themes.darkMode) ? '#ffb74d' : '#e65100'; ]]]"
+              state_display: "[[[\n  const bfn = (entity.attributes.friendly_name || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');\n  const bst = hass.states['sensor.' + bfn + '_bypass_status'];\n  if (bst && (bst.state || '').toLowerCase() === 'bypassed') return 'Bypassed';\n  const name = (entity.attributes.friendly_name || '').toLowerCase();\n  if (name.includes('light')) return entity.state === 'on' ? 'On' : 'Off';\n  if (name.includes('tamper')) return entity.state === 'on' ? 'Tampered' : 'Secure';\n  if (name.includes('panic')) return entity.state === 'on' ? 'PANIC' : 'Normal';\n  if (name.includes('fire') || name.includes('smoke')) return entity.state === 'on' ? 'ALERT' : 'Normal';\n  return entity.state === 'on' ? 'Open' : 'Closed';\n]]]\n"
               icon: "[[[\n  const isOff = entity.state === 'off';\n  const name = (entity.attributes.friendly_name || '').toLowerCase();\n  if (name.includes('light')) return isOff ? 'mdi:lightbulb-off' : 'mdi:lightbulb';\n  if (name.includes('door')) return isOff ? 'mdi:door-closed' : 'mdi:door-open';\n  if (name.includes('window')) return isOff ? 'mdi:window-closed' : 'mdi:window-open';\n  if (name.includes('gate')) return isOff ? 'mdi:gate' : 'mdi:gate-open';\n  if (name.includes('pir') || name.includes('motion')) return isOff ? 'mdi:motion-sensor-off' : 'mdi:motion-sensor';\n  if (name.includes('tamper')) return isOff ? 'mdi:lock' : 'mdi:lock-open-alert';\n  if (name.includes('fire') || name.includes('smoke')) return isOff ? 'mdi:smoke-detector-off' : 'mdi:fire-alert';\n  if (name.includes('panic')) return isOff ? 'mdi:alarm-light-off' : 'mdi:alarm-light';\n  return isOff ? 'mdi:shield-check' : 'mdi:shield-alert';\n]]]\n"
               name: "[[[\n  let n = entity?.attributes?.friendly_name || entity?.entity_id || 'Zone';\n  n = n.replace(/^Comfort\\s*/i, '');\n  return n.replace(/([a-z])([A-Z])/g, '$1 $2');\n]]]\n"
+              hold_action:
+                action: call-service
+                service: button.press
+                service_data:
+                  entity_id: "[[[ const n = (entity.attributes.friendly_name || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, ''); return n ? ('button.' + n + (variables.zone_bypassed ? '_clear_bypass' : '_set_bypass')) : ''; ]]]"
               state:
               - value: 'on'
                 styles:
                   card:
-                  - border: 4px solid var(--warning-color)
+                  - border: "[[[ return variables.zone_bypassed ? '2px dashed ' + variables.bypass_color : '4px solid var(--warning-color)'; ]]]"
                   icon:
-                  - color: red
+                  - color: "[[[ return variables.zone_bypassed ? variables.bypass_color : 'red'; ]]]"
                   name:
-                  - color: red
+                  - color: "[[[ return variables.zone_bypassed ? variables.bypass_color : 'red'; ]]]"
                   - font-weight: bold
                   - font-size: 11px
                   state:
-                  - color: red
+                  - color: "[[[ return variables.zone_bypassed ? variables.bypass_color : 'red'; ]]]"
                   - font-size: 10px
               - value: 'off'
                 styles:
                   card:
-                  - border: 1px solid var(--divider-color)
+                  - border: "[[[ return variables.zone_bypassed ? '2px dashed ' + variables.bypass_color : '1px solid var(--divider-color)'; ]]]"
                   icon:
-                  - color: green
+                  - color: "[[[ return variables.zone_bypassed ? variables.bypass_color : 'green'; ]]]"
                   name:
+                  - color: "[[[ return variables.zone_bypassed ? variables.bypass_color : 'inherit'; ]]]"
                   - font-size: 11px
                   state:
+                  - color: "[[[ return variables.zone_bypassed ? variables.bypass_color : 'inherit'; ]]]"
                   - font-size: 10px
           - entity_id: binary_sensor.comfort_*
             options:
               type: custom:button-card
               show_state: true
               show_icon: true
-              state_display: "[[[\n  const name = (entity.attributes.friendly_name || '').toLowerCase();\n  if (name.includes('light')) return entity.state === 'on' ? 'On' : 'Off';\n  if (name.includes('tamper')) return entity.state === 'on' ? 'Tampered' : 'Secure';\n  if (name.includes('panic')) return entity.state === 'on' ? 'PANIC' : 'Normal';\n  if (name.includes('fire') || name.includes('smoke')) return entity.state === 'on' ? 'ALERT' : 'Normal';\n  return entity.state === 'on' ? 'Open' : 'Closed';\n]]]\n"
+              triggers_update: all
+              variables:
+                zone_bypassed: "[[[ const n = (entity.attributes.friendly_name || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, ''); const s = n && hass.states['sensor.' + n + '_bypass_status']; return !!s && (s.state || '').toLowerCase() === 'bypassed'; ]]]"
+                bypass_color: "[[[ return (hass.themes && hass.themes.darkMode) ? '#ffb74d' : '#e65100'; ]]]"
+              state_display: "[[[\n  const bfn = (entity.attributes.friendly_name || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');\n  const bst = hass.states['sensor.' + bfn + '_bypass_status'];\n  if (bst && (bst.state || '').toLowerCase() === 'bypassed') return 'Bypassed';\n  const name = (entity.attributes.friendly_name || '').toLowerCase();\n  if (name.includes('light')) return entity.state === 'on' ? 'On' : 'Off';\n  if (name.includes('tamper')) return entity.state === 'on' ? 'Tampered' : 'Secure';\n  if (name.includes('panic')) return entity.state === 'on' ? 'PANIC' : 'Normal';\n  if (name.includes('fire') || name.includes('smoke')) return entity.state === 'on' ? 'ALERT' : 'Normal';\n  return entity.state === 'on' ? 'Open' : 'Closed';\n]]]\n"
               icon: "[[[\n  const isOff = entity.state === 'off';\n  const name = (entity.attributes.friendly_name || '').toLowerCase();\n  if (name.includes('light')) return isOff ? 'mdi:lightbulb-off' : 'mdi:lightbulb';\n  if (name.includes('door')) return isOff ? 'mdi:door-closed' : 'mdi:door-open';\n  if (name.includes('window')) return isOff ? 'mdi:window-closed' : 'mdi:window-open';\n  if (name.includes('gate')) return isOff ? 'mdi:gate' : 'mdi:gate-open';\n  if (name.includes('pir') || name.includes('motion')) return isOff ? 'mdi:motion-sensor-off' : 'mdi:motion-sensor';\n  if (name.includes('tamper')) return isOff ? 'mdi:lock' : 'mdi:lock-open-alert';\n  if (name.includes('fire') || name.includes('smoke')) return isOff ? 'mdi:smoke-detector-off' : 'mdi:fire-alert';\n  if (name.includes('panic')) return isOff ? 'mdi:alarm-light-off' : 'mdi:alarm-light';\n  return isOff ? 'mdi:shield-check' : 'mdi:shield-alert';\n]]]\n"
               name: "[[[\n  let n = entity?.attributes?.friendly_name || entity?.entity_id || 'Zone';\n  n = n.replace(/^Comfort\\s*/i, '');\n  return n.replace(/([a-z])([A-Z])/g, '$1 $2');\n]]]\n"
+              hold_action:
+                action: call-service
+                service: button.press
+                service_data:
+                  entity_id: "[[[ const n = (entity.attributes.friendly_name || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, ''); return n ? ('button.' + n + (variables.zone_bypassed ? '_clear_bypass' : '_set_bypass')) : ''; ]]]"
               state:
               - value: 'on'
                 styles:
                   card:
-                  - border: 4px solid var(--warning-color)
+                  - border: "[[[ return variables.zone_bypassed ? '2px dashed ' + variables.bypass_color : '4px solid var(--warning-color)'; ]]]"
                   icon:
-                  - color: red
+                  - color: "[[[ return variables.zone_bypassed ? variables.bypass_color : 'red'; ]]]"
                   name:
-                  - color: red
+                  - color: "[[[ return variables.zone_bypassed ? variables.bypass_color : 'red'; ]]]"
                   - font-weight: bold
                   - font-size: 11px
                   state:
-                  - color: red
+                  - color: "[[[ return variables.zone_bypassed ? variables.bypass_color : 'red'; ]]]"
                   - font-size: 10px
               - value: 'off'
                 styles:
                   card:
-                  - border: 1px solid var(--divider-color)
+                  - border: "[[[ return variables.zone_bypassed ? '2px dashed ' + variables.bypass_color : '1px solid var(--divider-color)'; ]]]"
                   icon:
-                  - color: green
+                  - color: "[[[ return variables.zone_bypassed ? variables.bypass_color : 'green'; ]]]"
                   name:
+                  - color: "[[[ return variables.zone_bypassed ? variables.bypass_color : 'inherit'; ]]]"
                   - font-size: 11px
                   state:
+                  - color: "[[[ return variables.zone_bypassed ? variables.bypass_color : 'inherit'; ]]]"
                   - font-size: 10px
           exclude:
           - name: Zone*
@@ -292,6 +284,13 @@ views:
       - type: grid
         columns: 2
         square: false
+        card_mod:
+          style: |
+            #root {
+              grid-template-columns: 48px 48px !important;
+              gap: 8px !important;
+              justify-content: start;
+            }
         cards:
         - show_name: true
           show_icon: true
@@ -304,32 +303,49 @@ views:
             data:
               entity_id: input_button.clear_alarm_log
           card_mod:
-            style: "ha-card {\n  height: 48px;\n  padding: 4px;\n}\n"
+            style: |
+              ha-card {
+                width: 48px;
+                height: 48px;
+                padding: 4px;
+              }
         - show_name: true
           show_icon: true
+          show_state: true
           type: button
-          icon: mdi:sort-clock-descending-outline
-          name: Latest first
           entity: input_boolean.alarm_log_latest_first
+          icon: mdi:sort-clock-descending
+          name: Latest first
           tap_action:
-            action: perform-action
-            perform_action: input_boolean.toggle
-            target:
-              entity_id: input_boolean.alarm_log_latest_first
+            action: toggle
           card_mod:
-            style: "ha-card {\n  height: 48px;\n  padding: 4px;\n}\n"
+            style: |
+              ha-card {
+                width: 48px;
+                height: 48px;
+                padding: 4px;
+              }
       - type: markdown
         title: Alarm Message Log
         content: |-
-          {%- set raw = (state_attr('sensor.comfort_mqtt_log', 'log') or '') | trim -%}
-          {%- set lines = raw.split('\n') if raw else [] -%}
+          {%- set log = state_attr('sensor.comfort_mqtt_log', 'log') or '' -%}
           {%- if is_state('input_boolean.alarm_log_latest_first', 'on') -%}
-          {{ lines | reverse | join('\n') }}
+          {{ log.split('\n') | reverse | join('\n') }}
           {%- else -%}
-          {{ lines | join('\n') }}
+          {{ log }}
           {%- endif -%}
         card_mod:
-          style: "ha-card {\n  max-height: 320px;\n  overflow-y: auto;\n}\nha-markdown {\n  max-height: 280px;  /* leaves room for title/padding */\n  overflow-y: auto;\n}\n"
+          style: |
+            ha-card {
+              height: 320px;
+              overflow: hidden;
+            }
+
+            ha-markdown {
+              height: 240px;
+              overflow-y: auto;
+              overflow-x: hidden;
+            }
     - type: heading
       heading_style: title
       heading: Log
@@ -337,3 +353,4 @@ views:
     cards:
     - type: heading
       heading_style: title
+- !include includes/alarm_status_view.yaml

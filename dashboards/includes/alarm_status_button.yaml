@@ -1,0 +1,10 @@
+# Insert immediately after the Comfort Message card, at the same card-list level.
+type: button
+name: Alarm & Trouble Status
+icon: mdi:table-eye
+show_state: false
+tap_action:
+  action: navigate
+  navigation_path: /comfort-alarm/am-status
+hold_action:
+  action: none

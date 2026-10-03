@@ -1,0 +1,14 @@
+# Place in /config/packages/comfort_am_status.yaml when configuration.yaml uses:
+# homeassistant:
+#   packages: !include_dir_named packages
+mqtt:
+  sensor:
+    - name: Comfort AM Status
+      unique_id: cytech_comfort_am_status
+      icon: mdi:table-eye
+      state_topic: cytech_comfort_mqtt/alarm/am_status
+      value_template: "{{ value_json.status }}"
+      json_attributes_topic: cytech_comfort_mqtt/alarm/am_status
+      json_attributes_template: "{{ {'rows': value_json.rows, 'updated': value_json.updated, 'started': value_json.started} | tojson }}"
+      expire_after: 45
+      qos: 1

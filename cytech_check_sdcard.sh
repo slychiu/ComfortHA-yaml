@@ -5,7 +5,8 @@
 # and counts host boot sessions started today to spot restart loops. Writes
 # /config/.cytech_sdcard_result as {"ts","status","message"} which
 # sensor.cytech_sdcard_result reads. Runs on every HA start via the
-# cytech_start_health_checks automation.
+# cytech_start_health_checks automation, and hourly via the v52a
+# cytech_periodic_sd_check automation.
 #
 # If the ssh client or the SSH addon is unavailable the check degrades to
 # SKIP -- detection must never break the start automation.

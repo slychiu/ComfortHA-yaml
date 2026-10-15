@@ -109,6 +109,24 @@
 # port is dead -- the v48b customer case) can see that the system itself is
 # still online, and a lit port with no internet no longer looks like a port
 # problem. Still DELIBERATELY DISPLAY-ONLY: no email, no popup.
+# v52a: SD-card early warning + update gate. (1) The card checks no longer run
+# only at HA start: cytech_periodic_sd_check reruns the kernel-log scan every
+# hour and cytech_periodic_canary the 8 MB write/readback test once a day, so
+# a card degrading mid-session is seen the same day -- and before the next
+# update writes the large burst that historically is what finishes a marginal
+# card. (2) binary_sensor.cytech_sd_trouble (new) ORs the four trouble
+# signals (SD status FAIL, canary FAIL, REPEATED_RESTARTS, a live integrity
+# alert). When an OS/Core/Supervisor update is OFFERED while that sensor is
+# on, the owner gets a persistent notification and the updatehold alert mails
+# support@ (+ the owner): contact Cytech before installing. The trigger
+# checks both update-entity id vintages present in the fleet (see the
+# trigger comment; entity ids pin at first registration -- the v42b lesson);
+# on a
+# fresh offer the gate reruns both checks and waits 2 minutes, so it judges
+# the CURRENT card, never a stale morning result, and stays silent on a
+# healthy one. It can only warn -- HA has no way to block Supervisor from
+# installing its own update -- and deliberately sends nothing when trouble
+# appears with NO update offered: the v35/v42 alerts above already mailed.
 shell_command:
   cytech_check_only: "nohup bash /config/cytech_check_only.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_update: "nohup bash /config/cytech_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"
@@ -160,6 +178,10 @@ shell_command:
   cytech_alert_mail_canary: "python3 /config/cytech_alert_mail.py canary"
   cytech_alert_mail_boot: "python3 /config/cytech_alert_mail.py boot"
   cytech_alert_mail_test: "python3 /config/cytech_alert_mail.py test"
+  # v52a: the update gate's letter (see the v52a note at the top). No result
+  # file of its own -- the sender composes the body from whichever card-check
+  # files are reporting trouble. Inline like the kinds above (v45b rule).
+  cytech_alert_mail_updatehold: "python3 /config/cytech_alert_mail.py updatehold"
 
 input_boolean:
   remote_support_access:
@@ -197,6 +219,19 @@ template:
         - service: shell_command.cytech_register_email
           data:
             email: "{{ states('input_text.cytech_alert_recipient') | trim }}"
+  # v52a: the update gate's single source of truth -- "the storage card
+  # already shows trouble". ORs the four trouble signals so the gate and its
+  # warning text can never disagree about what counts. device_class: problem
+  # makes the state render as Problem/OK wherever it is shown.
+  - binary_sensor:
+      name: "Cytech SD Trouble"
+      unique_id: cytech_sd_trouble_sensor
+      device_class: problem
+      state: >-
+        {{ states('sensor.cytech_sd_card_status') == 'FAIL'
+           or states('sensor.cytech_sd_canary') == 'FAIL'
+           or states('sensor.cytech_warning') == 'REPEATED_RESTARTS'
+           or states('sensor.cytech_integrity_alert') not in ['', 'unknown', 'unavailable'] }}
 
 timer:
   remote_support_access:
@@ -621,6 +656,107 @@ automation:
       # v48a: same one-call email step as the SD card alert above.
       - service: shell_command.cytech_alert_mail_boot
 
+  # v52a: hourly rerun of the kernel-log SD/IO scan. Until v52a it ran only
+  # at HA start, so a card degrading mid-session stayed invisible until the
+  # next restart. Read-only (journalctl); an hour boundary is plenty for a
+  # wear-out signal.
+  - id: cytech_periodic_sd_check
+    alias: "Cytech: Hourly SD card check"
+    mode: single
+    trigger:
+      # minutes: "23" -- deliberately off the hour, keeping clear of the
+      # 4-hourly eth/config checks, which hit on the hour.
+      - platform: time_pattern
+        minutes: "23"
+    action:
+      - service: shell_command.cytech_check_sdcard
+
+  # v52a: daily 8 MB write/readback canary -- the only check that exercises
+  # the card's write path itself (the kernel-log scan cannot see a card that
+  # writes fine but reads back wrong). One run a day keeps the extra wear at
+  # canary scale (see cytech_canary.sh).
+  - id: cytech_periodic_canary
+    alias: "Cytech: Daily SD write test"
+    mode: single
+    trigger:
+      - platform: time_pattern
+        hours: "3"
+        minutes: "41"
+    action:
+      - service: shell_command.cytech_canary
+
+  # v52a: the update gate, first-offer case. Fires the moment an offered
+  # OS/Core/Supervisor update appears: a template trigger fires only on the
+  # expression turning true (no from_state bookkeeping), and the explicit
+  # is_state list covers BOTH fleet vintages -- a unit registered on an older
+  # HA keeps update.home_assistant_core, a newer one has ..._core_update
+  # (entity ids pin at first registration; the v42b lesson). Ids that do not
+  # exist on a unit simply read false; the `os` variants are belt-and-braces
+  # (no vintage is known to use them).
+  - id: cytech_update_hold_on_offer
+    alias: "Cytech: Warn about offered updates when the SD card has problems"
+    mode: single
+    trigger:
+      - platform: template
+        value_template: >-
+          {{ is_state('update.home_assistant_operating_system_update', 'on')
+             or is_state('update.home_assistant_operating_system', 'on')
+             or is_state('update.home_assistant_os_update', 'on')
+             or is_state('update.home_assistant_os', 'on')
+             or is_state('update.home_assistant_core_update', 'on')
+             or is_state('update.home_assistant_core', 'on')
+             or is_state('update.home_assistant_supervisor_update', 'on')
+             or is_state('update.home_assistant_supervisor', 'on') }}
+    action:
+      # Rerun both card checks and wait: the owner could press Install any
+      # second, and the gate must judge the CURRENT card, not a stale morning
+      # result. Both scripts fork; 2 min covers the slow paths (SSH retries)
+      # plus the 60 s command_line re-scan before the notification is built.
+      - service: shell_command.cytech_check_sdcard
+      - service: shell_command.cytech_canary
+      - delay:
+          minutes: 2
+      # Quiet on a healthy card -- the normal case.
+      - condition: state
+        entity_id: binary_sensor.cytech_sd_trouble
+        state: "on"
+      - service: script.cytech_update_hold_notify
+
+  # v52a: the mirror case -- the card turns bad while an update offer is
+  # already sitting un-pressed (offers can sit for weeks). No fresh-check
+  # preamble here: a check just produced this trouble.
+  - id: cytech_update_hold_on_trouble
+    alias: "Cytech: Warn about offered updates when SD trouble appears"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: sensor.cytech_sd_card_status
+        to: "FAIL"
+      - platform: state
+        entity_id: sensor.cytech_sd_canary
+        to: "FAIL"
+      - platform: state
+        entity_id: sensor.cytech_warning
+        to: "REPEATED_RESTARTS"
+      - platform: state
+        entity_id: sensor.cytech_integrity_alert
+    condition:
+      # Only when an update is offered right now. With no offer pending the
+      # v35/v42 alert automations above already mailed about this exact
+      # trouble; this one would only repeat them.
+      - condition: template
+        value_template: >-
+          {{ is_state('update.home_assistant_operating_system_update', 'on')
+             or is_state('update.home_assistant_operating_system', 'on')
+             or is_state('update.home_assistant_os_update', 'on')
+             or is_state('update.home_assistant_os', 'on')
+             or is_state('update.home_assistant_core_update', 'on')
+             or is_state('update.home_assistant_core', 'on')
+             or is_state('update.home_assistant_supervisor_update', 'on')
+             or is_state('update.home_assistant_supervisor', 'on') }}
+    action:
+      - service: script.cytech_update_hold_notify
+
 # v34: MQTT sensor backing the System Status card in dashboards/alarm.yaml.
 # Reads the raw panel status word from cytech_comfort_mqtt/alarm (the same
 # topic the alarm_control_panel uses) so a Trouble state is visible in HA --
@@ -667,3 +803,26 @@ script:
         data:
           title: "Test Email"
           message: "Test email sent -- check your inbox."
+  # v52a: ONE place for the update-gate warning -- popup + mail -- so the two
+  # gate automations (offer appears / trouble appears) can never drift apart.
+  # The message re-reads the sensors at send time, in the same priority order
+  # the mail body uses (cytech_alert_mail.py gate_message).
+  cytech_update_hold_notify:
+    alias: Cytech Update Hold Notify
+    sequence:
+      - service: persistent_notification.create
+        data:
+          notification_id: cytech_update_hold
+          title: "Do not install the update yet -- storage card problem detected"
+          message: >-
+            {%- set m = state_attr('sensor.cytech_sd_card_status', 'message') if is_state('sensor.cytech_sd_card_status', 'FAIL')
+               else state_attr('sensor.cytech_sd_canary', 'message') if is_state('sensor.cytech_sd_canary', 'FAIL')
+               else state_attr('sensor.cytech_warning', 'message') if is_state('sensor.cytech_warning', 'REPEATED_RESTARTS')
+               else state_attr('sensor.cytech_integrity_alert', 'message') %}
+            An update is offered for this system, but the storage card health
+            checks are reporting a problem: {{ m or 'see the System Health page' }}.
+            Please contact Cytech before installing it -- the update writes a
+            large amount of data and could make a failing card worse. Your
+            system keeps working normally in the meantime, and Cytech has
+            been notified automatically.
+      - service: shell_command.cytech_alert_mail_updatehold

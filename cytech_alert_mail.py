@@ -10,9 +10,15 @@
 # HA's own storage or config entries.
 #
 # Usage:  python3 /config/cytech_alert_mail.py <kind> [--dry-run]
-#   kinds: integrity | sdcard | canary | boot | test
+#   kinds: integrity | sdcard | canary | boot | test | updatehold
 #
-# It is called from packages/cytech.yaml by five FIXED shell_commands, one per
+# v52a: new kind 'updatehold' -- the SD-trouble/update-offer gate in
+# packages/cytech.yaml. Unlike the other kinds it has no result file of its
+# own: gate_message() composes the body from whichever card-check files are
+# currently reporting trouble, in priority order, so the letter always matches
+# what the dashboards are showing at send time.
+#
+# It is called from packages/cytech.yaml by six FIXED shell_commands, one per
 # kind. The kind is a device-side constant: no alert text, no owner input and
 # no template ever reaches a shell command line. The message is read HERE, out
 # of the same device-local result file HA's own command_line sensors read, so
@@ -60,6 +66,10 @@ KINDS = {
     'boot': ('.cytech_boot_result', 'Cytech repeated restarts alert: %s',
              '%s: Repeated restarts detected: '),
     'test': (None, 'Cytech test email: %s', ''),
+    # v52a: body comes from gate_message() -- there is no single result file
+    # behind the gate. Support-always / owner-when-known copies, same as the
+    # other alert kinds.
+    'updatehold': (None, 'Cytech: do not install the pending update: %s', '%s: '),
 }
 FALLBACK = 'see sensor'
 TEST_BODY = 'Test email from a Cytech system.'
@@ -100,6 +110,40 @@ def read_message(path):
             return (json.load(f).get('message') or '').strip() or FALLBACK
     except Exception:
         return FALLBACK
+
+
+# v52a: the update gate's advice line. The per-check detail is appended from
+# the same result files the notification popup reads, in the same priority
+# order (SD status, canary, boot storm, integrity).
+GATE_ADVICE = ('An update is being offered for this system and Cytech has been '
+               'notified, but the storage card health checks are reporting a '
+               'problem. Please do NOT install the update until Cytech support '
+               'has looked at this -- installing it writes a large amount of '
+               'data and could make a failing card worse. The system keeps '
+               'working normally in the meantime.')
+
+
+def gate_message():
+    """Compose the update-gate body: the advice line, plus the most specific
+    trouble detail currently on disk. Like read_message, this never re-decides
+    whether the gate should have fired (the automation already confirmed
+    that) -- a missing/garbled file just falls through to the generic
+    advice."""
+    for name, bad in (('.cytech_sdcard_result', ('FAIL',)),
+                      ('.cytech_canary_result', ('FAIL',)),
+                      ('.cytech_boot_result', ('REPEATED_RESTARTS',)),
+                      ('.cytech_integrity_alert', None)):
+        try:
+            with open(os.path.join(RESULT_DIR, name)) as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        if bad is not None and data.get('status') not in bad:
+            continue
+        detail = (data.get('message') or '').strip()
+        if detail:
+            return GATE_ADVICE + ' What the checks report: ' + detail
+    return GATE_ADVICE
 
 
 def log_line(text):
@@ -177,6 +221,14 @@ def main():
             return 2
         body = TEST_BODY
         copies = [('owner', owner)]
+    elif kind == 'updatehold':
+        # v52a: composed from the card-check files; this is an alert, so the
+        # v41 rule applies -- support always, owner's registered copy when
+        # one is known.
+        body = prefix % unit + gate_message()
+        copies = [('support', SUPPORT)]
+        if owner:
+            copies.append(('owner', owner))
     else:
         body = prefix % unit + read_message(os.path.join(RESULT_DIR, path))
         # v41 rule, unchanged: support@cytech.biz always gets every alert, and

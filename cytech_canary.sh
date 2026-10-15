@@ -1,11 +1,13 @@
 #!/bin/bash
 # Per-boot write/readback canary (v35) on the data partition. Detects a
 # failing write path or erroring/full filesystem BEFORE it becomes a boot
-# loop. Small by design (8 MB): ~3 GB/year at one boot/day -- far below a
-# good card's endurance budget while HA itself writes 100s of MB daily.
+# loop. Small by design (8 MB per run; one run a day steady-state plus one
+# per boot, ~3-6 GB/year) -- far below a good card's endurance budget while
+# HA itself writes 100s of MB daily.
 # Writes /config/.cytech_canary_result as {"ts","status","message"} which
 # sensor.cytech_canary_result reads. Runs on every HA start via the
-# cytech_start_health_checks automation.
+# cytech_start_health_checks automation, and daily (03:41) via the v52a
+# cytech_periodic_canary automation.
 OUT=/config/.cytech_canary_result
 LOG=/config/cytech_sd.log
 W=/config/.cytech_canary.tmp

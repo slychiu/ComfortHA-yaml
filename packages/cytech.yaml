@@ -621,6 +621,12 @@ automation:
     action:
       - service: shell_command.cytech_check_eth
 
+  # v52d: every card-trouble alert (this one, the canary and boot-storm
+  # alerts below, and the update-hold warning) also tells the owner to keep
+  # a backup copy of the system while the card still works -- a card that
+  # dies takes the only copy of the system with it (2026-10-15 customer).
+  # The same sentence lives in cytech_alert_mail.py (BACKUP_ADVICE): popup
+  # and email must never drift apart.
   - id: cytech_alert_sdcard_failed
     alias: "Cytech: SD card alert"
     mode: single
@@ -633,7 +639,10 @@ automation:
         data:
           notification_id: cytech_sd_alert
           title: "SD card problem detected"
-          message: "{{ state_attr('sensor.cytech_sd_card_status', 'message') | default('see sensor') }}"
+          message: >-
+            {{ state_attr('sensor.cytech_sd_card_status', 'message') | default('see sensor') }}
+            Please make a backup of your system to your PC or Google Drive
+            while it is still working -- Settings > System > Backups.
       # v41/v48a: support@cytech.biz always gets every alert; the owner's
       # registered address is added as a second copy only when one is known.
       # Both copies now happen inside the sender.
@@ -651,7 +660,10 @@ automation:
         data:
           notification_id: cytech_canary_alert
           title: "SD card write test failed"
-          message: "{{ state_attr('sensor.cytech_sd_canary', 'message') | default('see sensor') }}"
+          message: >-
+            {{ state_attr('sensor.cytech_sd_canary', 'message') | default('see sensor') }}
+            Please make a backup of your system to your PC or Google Drive
+            while it is still working -- Settings > System > Backups.
       # v48a: same one-call email step as the SD card alert above.
       - service: shell_command.cytech_alert_mail_canary
 
@@ -667,7 +679,10 @@ automation:
         data:
           notification_id: cytech_boot_alert
           title: "Repeated restarts detected"
-          message: "{{ state_attr('sensor.cytech_warning', 'message') | default('see sensor') }}"
+          message: >-
+            {{ state_attr('sensor.cytech_warning', 'message') | default('see sensor') }}
+            Please make a backup of your system to your PC or Google Drive
+            while it is still working -- Settings > System > Backups.
       # v48a: same one-call email step as the SD card alert above.
       - service: shell_command.cytech_alert_mail_boot
 
@@ -837,7 +852,9 @@ script:
             An update is offered for this system, but the storage card health
             checks are reporting a problem: {{ m or 'see the System Health page' }}.
             Please contact Cytech before installing it -- the update writes a
-            large amount of data and could make a failing card worse. Your
-            system keeps working normally in the meantime, and Cytech has
-            been notified automatically.
+            large amount of data and could make a failing card worse. Please
+            make a backup of your system to your PC or Google Drive while it
+            is still working -- Settings > System > Backups. Your system
+            keeps working normally in the meantime, and Cytech has been
+            notified automatically.
       - service: shell_command.cytech_alert_mail_updatehold

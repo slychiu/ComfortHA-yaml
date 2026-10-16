@@ -18,6 +18,12 @@
 # currently reporting trouble, in priority order, so the letter always matches
 # what the dashboards are showing at send time.
 #
+# v52d: every card-trouble letter (sdcard, canary, boot, updatehold) closes
+# with BACKUP_ADVICE -- keep a copy while the card still works. The same
+# sentence is appended to the matching popups in packages/cytech.yaml; the
+# two live in step, and a card that dies otherwise takes the only copy of
+# the system with it (2026-10-15 customer case).
+#
 # It is called from packages/cytech.yaml by six FIXED shell_commands, one per
 # kind. The kind is a device-side constant: no alert text, no owner input and
 # no template ever reaches a shell command line. The message is read HERE, out
@@ -112,6 +118,13 @@ def read_message(path):
         return FALLBACK
 
 
+# v52d: the closing line of every card-trouble letter. Byte-identical to the
+# sentence appended to the popups in packages/cytech.yaml -- change both
+# together.
+BACKUP_ADVICE = ('Please make a backup of your system to your PC or Google '
+                 'Drive while it is still working -- Settings > System > '
+                 'Backups.')
+
 # v52a: the update gate's advice line. The per-check detail is appended from
 # the same result files the notification popup reads, in the same priority
 # order (SD status, canary, boot storm, integrity).
@@ -119,7 +132,9 @@ GATE_ADVICE = ('An update is being offered for this system and Cytech has been '
                'notified, but the storage card health checks are reporting a '
                'problem. Please do NOT install the update until Cytech support '
                'has looked at this -- installing it writes a large amount of '
-               'data and could make a failing card worse. The system keeps '
+               'data and could make a failing card worse. Please make a backup '
+               'of your system to your PC or Google Drive while it is still '
+               'working -- Settings > System > Backups. The system keeps '
                'working normally in the meantime.')
 
 
@@ -231,6 +246,11 @@ def main():
             copies.append(('owner', owner))
     else:
         body = prefix % unit + read_message(os.path.join(RESULT_DIR, path))
+        # v52d: the card-trouble kinds close with the backup advice. The
+        # integrity alert is a data/config alert, not a card alert -- it does
+        # not carry it.
+        if kind in ('sdcard', 'canary', 'boot'):
+            body += ' ' + BACKUP_ADVICE
         # v41 rule, unchanged: support@cytech.biz always gets every alert, and
         # the owner's registered address is added when there is one.
         copies = [('support', SUPPORT)]

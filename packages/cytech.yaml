@@ -127,6 +127,19 @@
 # healthy one. It can only warn -- HA has no way to block Supervisor from
 # installing its own update -- and deliberately sends nothing when trouble
 # appears with NO update offered: the v35/v42 alerts above already mailed.
+# v52c: alert-email setup no longer dead-ends on "ask your installer". (1)
+# cytech_register_email.sh's no-credentials status now reads "still finishing
+# setup -- press Register again in a few minutes", because the credentials
+# genuinely arrive on their own: ensure_smtp_credential in first_boot.sh
+# fetches them from the private repo at every maintenance pass on any unit
+# whose .cytech_secrets carries CYTECH_SECRETS_TOKEN. Telling the owner to
+# contact an installer was a dead end -- a freshly re-imaged unit hit exactly
+# this before any remote access existed to help, and the state it reported is
+# transient by design. (2) reset.sh now checks CYTECH_SECRETS_TOKEN is
+# present before it lets a golden-image master be captured (same
+# verify-before-capture shape as the v20 DISCARD-rule check), so no future
+# image can ship clones that are unable to self-provision their email
+# credentials.
 shell_command:
   cytech_check_only: "nohup bash /config/cytech_check_only.sh </dev/null >> /config/cytech_update.log 2>&1 &"
   cytech_check_update: "nohup bash /config/cytech_update.sh </dev/null >> /config/cytech_update.log 2>&1 &"
@@ -441,9 +454,11 @@ command_line:
         - message
       scan_interval: 30
   - sensor:
-      # v40: whether this unit's mail account is installed (installer step).
-      # Gates the dashboard's "not registered yet" hint so the owner is only
-      # asked to register where registering can actually work.
+      # v40: whether this unit's mail account is ready. The credentials
+      # self-heal from the private repo at every maintenance pass (v52c), so
+      # this only reads 'no' while a unit is still finishing provisioning --
+      # it gates the dashboard's "not registered yet" hint so the owner is
+      # only asked to register where registering can actually work.
       name: "Cytech Email Configured"
       unique_id: cytech_email_configured_sensor
       command: "grep -q '^CY_SMTP_PASS=' /config/.cytech_secrets 2>/dev/null && echo yes || echo no"

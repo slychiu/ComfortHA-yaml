@@ -198,7 +198,7 @@ def main():
     user = values.get('CY_SMTP_USER', '')
     password = values.get('CY_SMTP_PASS', '')
     # .cytech_registered is what the owner themselves registered and what
-    # sensor.cytech_owner_email reads; CY_SMTP_RECIPIENT is the installer-seeded
+    # sensor.cytech_owner_email reads; CY_SMTP_RECIPIENT is the recorded
     # recipient (the register script keeps it in step), used only as the test
     # button's fallback so a unit that never had a Register press can still be
     # tested.

@@ -10,14 +10,21 @@
 #                    gets the registration notice (unit + owner address) for
 #                    the unit<->owner registry. A wrong address fails at send
 #                    time with an explicit status, and nothing is stored.
-#   no SMTP creds -> "ask your installer" (the owner can never make the
-#                    system send mail; only installer-seeded credentials can).
+#   no SMTP creds -> "still finishing setup" status (v52c): the credentials
+#                    arrive automatically -- ensure_smtp_credential (first_boot.sh)
+#                    fetches them from the private repo at every maintenance
+#                    pass on any unit whose .cytech_secrets carries
+#                    CYTECH_SECRETS_TOKEN -- so this is a transient state and
+#                    the owner is never sent to an installer (that wording was
+#                    a dead end for a freshly re-imaged unit). The owner can
+#                    still never make the system send mail; only the fetched
+#                    credentials can.
 # Every outcome ALSO writes /config/.cytech_register_popup, which the v40
 # automation turns into a screen popup -- Register always has a visible
 # return status, not just the small inline line. CY_SMTP_RECIPIENT is stored
-# in /config/.cytech_secrets (never in this repo; USER/PASS are
-# installer-seeded). Runs in HA Core's container via shell_command with the
-# email as $1.
+# in /config/.cytech_secrets (never in this repo; USER/PASS self-heal from
+# the private repo at every maintenance pass). Runs in HA Core's container
+# via shell_command with the email as $1.
 #
 # Usage: bash /config/cytech_register_email.sh '<email>'
 #        bash /config/cytech_register_email.sh '<email>' --dry-run
@@ -28,8 +35,8 @@
 # A successful registration is also logged (unit, owner email, firmware
 # version, timestamp) to a Google Sheet via an Apps Script web app, for a
 # fleet-wide running count/list of registered units -- entirely best-effort:
-# needs CY_SHEETS_WEBHOOK_URL + CY_SHEETS_SECRET in .cytech_secrets (installer-
-# seeded, same as the SMTP creds; never in this repo), and any failure here
+# needs CY_SHEETS_WEBHOOK_URL + CY_SHEETS_SECRET in .cytech_secrets (seeded
+# once at provisioning; never in this repo), and any failure here
 # (missing config, offline, endpoint error) never affects the owner-facing
 # outcome of the Register press.
 EMAIL="$1"
@@ -94,9 +101,9 @@ if os.path.exists(CFG):
                 VALUES[k.strip()] = v.strip()
 
 if not VALUES.get('CY_SMTP_PASS') or not VALUES.get('CY_SMTP_USER'):
-    outcome('ERROR', 'Alert email is not configured for this system yet -- '
-                     'ask your installer to finish the email setup first, '
-                     'then register again')
+    outcome('ERROR', 'Alert emails are still finishing setup on this system '
+                     '-- this finishes automatically. Please press Register '
+                     'again in a few minutes.')
 
 existing = ''
 if os.path.exists(REG):
@@ -228,10 +235,11 @@ fi
 
 # ALWAYS run the email package generator now -- it byte-compares, so an
 # unchanged package prints "no change" and never restarts. Gating it on
-# "recipient changed" was wrong: after the installer seeds the credentials
-# (incl. a recipient), a first-time owner press may change NOTHING in the
-# secrets file while the package still has never been generated on this
-# device -- email would silently not work until the next boot. The restart
+# "recipient changed" was wrong: with the credentials arriving automatically
+# (and a recipient possibly already recorded), a first-time owner press may
+# change NOTHING in the secrets file while the package still has never been
+# generated on this device -- email would silently not work until the next
+# boot. The restart
 # (if any) happens LAST, after the mail and the registered state are on disk.
 RESULT=$(python3 /config/cytech_email_gen.py 2>&1)
 echo "$RESULT" >> /config/cytech_update.log

@@ -42,6 +42,22 @@ else
   echo "ERROR: DISCARD rule NOT found in host overlay after write -- DO NOT capture this image until this is fixed."
 fi
 
+# 0b. (v52c) The alert-email credentials self-provision on every maintenance
+# pass -- ensure_smtp_credential in first_boot.sh fetches them from the
+# private repo on any unit whose .cytech_secrets carries
+# CYTECH_SECRETS_TOKEN. That file is NOT wiped by this script (it is what
+# ships the Tailscale client keys), so the token rides into the image iff the
+# master has it. Check that here: an image captured without the token can
+# never set up owner alert email on its clones, and nothing on a clone can
+# fetch the token afterwards (it must already know a secret to authenticate
+# to the private repo). Add the token line to /config/.cytech_secrets on the
+# master and re-run this script before capturing.
+if grep -q '^CYTECH_SECRETS_TOKEN=' /config/.cytech_secrets 2>/dev/null; then
+  echo "CYTECH_SECRETS_TOKEN present -- clones will self-provision alert-email credentials."
+else
+  echo "ERROR: CYTECH_SECRETS_TOKEN missing from /config/.cytech_secrets -- DO NOT capture this image: its clones could never set up owner alert email and nothing on a clone can fetch the token afterwards. Add the token line and re-run."
+fi
+
 # 1. Auth and user accounts
 rm -f .storage/auth
 rm -f .storage/auth_provider.homeassistant

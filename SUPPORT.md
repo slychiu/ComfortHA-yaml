@@ -105,6 +105,7 @@ amount of data and could make a failing card worse.
 | Comfort controls stop updating; the add-on log shows **"MQTT_DEVICE_COMFORT not ready"** | The bridge cannot reach the Comfort panel over its serial connection. | Check the Comfort panel's power and the cable between panel and this device. If it persists, contact support. |
 | Remote Access page says **"Generating Secure Remote Link… Please wait"** | Setup is still finishing (usually a few minutes). | Wait a few minutes and refresh the page. If it still says this after a full restart, contact support. |
 | Supervisor banner **"Unsupported system — DNS server issues"** | A single check against your DNS server failed. It usually clears itself on the next check. | Wait a few hours. If it persists, contact support. |
+| Repair popup **"Insecure secrets detected in app configuration"** naming the app *Cytech Comfort* | Home Assistant's new leaked-password check found that a password/code stored in the Comfort app's own settings (for example the local MQTT password) appears in a public list of leaked passwords. Nothing is broken, and nothing has left your system — only a scrambled fingerprint of each code is compared, never the code itself. | It is safe to press **Ignore** on these repairs. Do not change any passwords or codes yourself. This warning does not mean your system is compromised. Cytech is aware of it and can tidy up the underlying codes during a future support session. |
 
 ---
 
@@ -192,6 +193,13 @@ Grounding facts for owner questions:
   **REPEATED_RESTARTS**; `sensor.cytech_integrity_status` /
   `sensor.cytech_integrity_alert` are the configuration self-check, which
   self-heals automatically.
+- A Repair titled **"Insecure secrets detected in app configuration"** naming
+  the app **"Cytech Comfort"** is Home Assistant's Have I Been Pwned check on
+  the bridge app's stored password-type options (the local MQTT password and
+  the Comfort login code). It is advisory only: nothing is broken, the check
+  uses k-anonymity (no secret leaves the unit), and pressing **Ignore** is the
+  documented resolution for the owner. It does not indicate a compromise and
+  does not affect Comfort operation.
 - The **"Do not install the Home Assistant update yet"** alert means a
   storage-card problem was detected while a Home Assistant OS/Core update is
   offered. Home Assistant updates write heavily and can worsen a failing card;

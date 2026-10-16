@@ -75,7 +75,9 @@ KINDS = {
     # v52a: body comes from gate_message() -- there is no single result file
     # behind the gate. Support-always / owner-when-known copies, same as the
     # other alert kinds.
-    'updatehold': (None, 'Cytech: do not install the pending update: %s', '%s: '),
+    'updatehold': (None,
+                   'Cytech: do not install the pending Home Assistant update: %s',
+                   '%s: '),
 }
 FALLBACK = 'see sensor'
 TEST_BODY = 'Test email from a Cytech system.'
@@ -127,15 +129,20 @@ BACKUP_ADVICE = ('Please make a backup of your system to your PC or Google '
 
 # v52a: the update gate's advice line. The per-check detail is appended from
 # the same result files the notification popup reads, in the same priority
-# order (SD status, canary, boot storm, integrity).
-GATE_ADVICE = ('An update is being offered for this system and Cytech has been '
-               'notified, but the storage card health checks are reporting a '
-               'problem. Please do NOT install the update until Cytech support '
-               'has looked at this -- installing it writes a large amount of '
-               'data and could make a failing card worse. Please make a backup '
-               'of your system to your PC or Google Drive while it is still '
-               'working -- Settings > System > Backups. The system keeps '
-               'working normally in the meantime.')
+# order (SD status, canary, boot storm, integrity). The wording names the
+# Home Assistant update explicitly (pre-release fold into 52, 2026-10-16):
+# "the update" alone could be read as the Comfort Check for Update.
+GATE_ADVICE = ('Home Assistant is offering a software update (Home Assistant '
+               'OS or Core) and Cytech has been notified, but the storage card '
+               'health checks on this system are reporting a problem. Please '
+               'do NOT install the Home Assistant update until Cytech support '
+               'has looked at this -- the update writes a large amount of data '
+               'and could make a failing card worse. This warning is only '
+               'about the Home Assistant update offered under Settings > '
+               'System > Updates; your Comfort system and its Check for Update '
+               'keep working normally. Please make a backup of your system to '
+               'your PC or Google Drive while it is still working -- Settings '
+               '> System > Backups.')
 
 
 def gate_message():

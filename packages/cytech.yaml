@@ -843,18 +843,21 @@ script:
       - service: persistent_notification.create
         data:
           notification_id: cytech_update_hold
-          title: "Do not install the update yet -- storage card problem detected"
+          title: "Do not install the Home Assistant update yet -- storage card problem detected"
           message: >-
             {%- set m = state_attr('sensor.cytech_sd_card_status', 'message') if is_state('sensor.cytech_sd_card_status', 'FAIL')
                else state_attr('sensor.cytech_sd_canary', 'message') if is_state('sensor.cytech_sd_canary', 'FAIL')
                else state_attr('sensor.cytech_warning', 'message') if is_state('sensor.cytech_warning', 'REPEATED_RESTARTS')
                else state_attr('sensor.cytech_integrity_alert', 'message') %}
-            An update is offered for this system, but the storage card health
-            checks are reporting a problem: {{ m or 'see the System Health page' }}.
-            Please contact Cytech before installing it -- the update writes a
-            large amount of data and could make a failing card worse. Please
-            make a backup of your system to your PC or Google Drive while it
-            is still working -- Settings > System > Backups. Your system
-            keeps working normally in the meantime, and Cytech has been
+            Home Assistant is offering a software update (Home Assistant OS
+            or Core), but the storage card health checks on this system are
+            reporting a problem: {{ m or 'see the System Health page' }}.
+            Please contact Cytech before installing the Home Assistant update
+            -- it writes a large amount of data and could make a failing card
+            worse. This warning is only about the Home Assistant update
+            offered under Settings > System > Updates; your Comfort system
+            and its Check for Update keep working normally. Please make a
+            backup of your system to your PC or Google Drive while it is
+            still working -- Settings > System > Backups. Cytech has been
             notified automatically.
       - service: shell_command.cytech_alert_mail_updatehold

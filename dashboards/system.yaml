@@ -68,8 +68,8 @@ views:
         Contact support@cytech.biz
 
         **Owner Support Guide** — what each message means, what you can safely
-        do yourself, and how to do more with your system (automations, your
-        own dashboards, Comfort entities):
+        do yourself, and **how to use AI to do more with your system**
+        (automations, your own dashboards, Comfort entities):
         [Read the guide](https://github.com/slychiu/ComfortHA-yaml/blob/main/SUPPORT.md)
     - type: entities
       entities:

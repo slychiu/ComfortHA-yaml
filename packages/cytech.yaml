@@ -1,7 +1,8 @@
 # v53: comment-only bump so cytech_update.sh's auto-restart trigger fires --
-# this release's only functional change is the Owner Support Guide link on the
-# Config Files page (dashboards/system.yaml); the YAML-mode dashboard reloads
-# on the Core restart this bump causes.
+# this release's functional changes are on the Config Files page
+# (dashboards/system.yaml: the Owner Support Guide link), and YAML-mode
+# dashboards only reload when Core restarts. Keep a comment change in every
+# dashboards-only round so the trigger also fires between bench revisions.
 # v22: adds the Remote Support Access toggle (input_boolean/timer/automations
 # below) and its two shell_command entries -- see enable_remote_support.sh /
 # disable_remote_support.sh and ensure_ssh_admin_access() in first_boot.sh.

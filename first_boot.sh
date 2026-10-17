@@ -1991,6 +1991,27 @@ PYEOF
   return $CHANGED
 }
 
+# v54: Tailscale probes for the fake-provisioned detector below. Both run the
+# request inside the Advanced SSH addon: the Core container's Supervisor token
+# returns 401 on some units (office, 2026-10-02), while the addon's works, and
+# every other nested-ssh step in this script already goes through it.
+# tailscale_backend_state returns empty when the addon or tailscaled cannot be
+# reached at all; the detector treats that as not Running.
+tailscale_backend_state() {
+  ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
+    "docker exec app_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null" \
+    2>/dev/null | jq -r '.BackendState // empty' 2>/dev/null
+}
+
+# The remote shell expands $SUPERVISOR_TOKEN (the addon's own token). Do NOT
+# let the local shell expand it -- that would send the Core-context token,
+# which is the one that can 401.
+start_tailscale_addon() {
+  ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
+    'curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/a0d7b954_tailscale/start' \
+    >/dev/null 2>&1 || true
+}
+
 # 1. Maintenance mode — already provisioned, just run health checks
 if [ -f /config/.zero_touch_completed ]; then
   # .reset_cycle_active still guards against this branch's dashboard/DNS
@@ -2047,36 +2068,34 @@ if [ -f /config/.zero_touch_completed ]; then
     ensure_smtp_credential
     ensure_email_secrets
 
-    TS_STATE=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
-      "docker exec app_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null" \
-      2>/dev/null | jq -r '.BackendState // empty' 2>/dev/null)
+    TS_STATE=$(tailscale_backend_state)
 
-    if [ "$TS_STATE" = "NeedsLogin" ]; then
-      echo "Tailscale NeedsLogin — state was wiped (SD card issue?). Re-authenticating..."
-      { set +x; } 2>/dev/null
-      AUTH_KEY=$(get_auth_key)
-      ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
-        "docker exec app_a0d7b954_tailscale /opt/tailscale up \
-          --authkey='${AUTH_KEY}' \
-          --accept-routes=true --hostname=cytech" 2>/dev/null
-      set -x
-      echo "Tailscale re-auth sent. Waiting 90s for Funnel and hostname to stabilise..."
-      sleep 90
-      NEW_FULL_DNS=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
-        "docker exec app_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null" \
-        2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//')
-      NEW_HOSTNAME=$(echo "$NEW_FULL_DNS" | cut -d. -f1)
-      echo "Tailscale assigned: ${NEW_FULL_DNS}"
-      STORED_ID=$(cat /config/device_id.txt 2>/dev/null)
-      if [ -n "$NEW_HOSTNAME" ] && [ "$NEW_HOSTNAME" != "$STORED_ID" ]; then
-        echo "Hostname mismatch after re-auth: stored=${STORED_ID} actual=${NEW_HOSTNAME}. Repairing..."
-        launch_maintenance_repair "$NEW_FULL_DNS"
-        exit 0
-      else
-        echo "Hostname OK: ${NEW_HOSTNAME}"
-      fi
+    # v54: fake-provisioned raw-capture repair. An SD image captured from a
+    # provisioned master WITHOUT reset.sh bakes in .zero_touch_completed plus
+    # the master's tailscaled.state, device_id, SSH key and QR. Every clone
+    # then takes this maintenance branch forever and never joins the tailnet;
+    # the old heal here acted only on exactly NeedsLogin/Running and silently
+    # no-opped on any other state, and no owner action (restart, reboot,
+    # update) can escape a maintenance pass. So when Tailscale cannot reach
+    # Running even after we start the addon and give it up to 2 minutes (this
+    # also rides out an HA OS update recreating the addon container), the
+    # completion flag is provably false: clear it and the baked identity
+    # artifacts, then fall through into the fresh-provisioning path below IN
+    # THIS PASS. That path sees no Running identity, wipes tailscaled.state
+    # and registers a new node; finish_firstboot then rewrites device_id.txt,
+    # external_url and the QR. Zero owner steps beyond the update itself --
+    # the update's own Core restart is what re-runs this script.
+    if [ "$TS_STATE" != "Running" ]; then
+      echo "Tailscale not Running (state: ${TS_STATE:-unreachable}) — starting the addon and re-probing..."
+      for PROBE in 1 2 3 4 5 6 7 8; do
+        start_tailscale_addon
+        sleep 15
+        TS_STATE=$(tailscale_backend_state)
+        [ "$TS_STATE" = "Running" ] && break
+      done
+    fi
 
-    elif [ "$TS_STATE" = "Running" ]; then
+    if [ "$TS_STATE" = "Running" ]; then
       STORED_ID=$(cat /config/device_id.txt 2>/dev/null)
 
       # Compare full Tailscale DNSName against stored external_url.
@@ -2098,11 +2117,21 @@ if [ -f /config/.zero_touch_completed ]; then
       fi
 
     else
-      echo "Tailscale state: ${TS_STATE} (no action needed)"
+      echo "FAKE-PROVISIONED: .zero_touch_completed is present but Tailscale never reached Running (state: ${TS_STATE:-unreachable})."
+      echo "Clearing the false completion flag and the baked identity, then re-provisioning in this pass."
+      rm -f /config/.zero_touch_completed /config/.dev_reset_mode
+      rm -f /config/.ssh/id_rsa /config/.ssh/id_rsa.pub
+      rm -f /config/www/remote_access_qr.png
+      echo "Initializing Secure Link..." > /config/device_id.txt
+      REPROVISIONING=1
     fi
   fi
-  remove_scratch_images
-  exit 0
+  if [ "${REPROVISIONING:-0}" = "1" ]; then
+    echo "Falling through to fresh provisioning."
+  else
+    remove_scratch_images
+    exit 0
+  fi
 fi
 
 # Fresh device -- run the flash canary before anything else touches disk.

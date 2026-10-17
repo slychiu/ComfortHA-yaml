@@ -2,14 +2,15 @@
 
 This guide is for owners of a Cytech Comfort system running on Home Assistant.
 It explains what the on-screen messages mean, what you can safely do yourself,
-how to get answers from an AI assistant (Claude, DeepSeek, ChatGPT and similar),
-and how to reach Cytech support.
+how to get answers from an AI assistant (Claude, DeepSeek, ChatGPT and similar)
+— including how to ask it to help you set up automations, your own dashboards
+and more — and how to reach Cytech support.
 
 **The two GitHub links below are public and safe to share.** Nothing secret is
 ever kept in them — email passwords and other private data live only on your
 own system.
 
-*Last updated: 2026-10-16.*
+*Last updated: 2026-10-17.*
 
 ---
 
@@ -24,7 +25,9 @@ own system.
    the assistant tells you to contact your supplier.
 
 Most problems also email Cytech automatically — see
-[section 7](#7-how-cytech-hears-about-problems).
+[section 7](#7-how-cytech-hears-about-problems). To **build or change
+something** (a new dashboard, an automation), see
+[section 9](#9-doing-more-with-your-system).
 
 ---
 
@@ -212,3 +215,66 @@ Grounding facts for owner questions:
 - Alerts email support@cytech.biz automatically and copy the owner when
   registered. For anything destructive or unresolved, direct the owner to
   support@cytech.biz.
+
+---
+
+## 9. Doing more with your system
+
+Cytech's own pages focus on the alarm. Everything else Home Assistant can do —
+automations, your own dashboards, phone notifications and more — is available
+on the same device, and you do not need to learn it in advance.
+
+**The easiest way is to ask an AI assistant.** Claude, DeepSeek, ChatGPT and
+similar can walk you through almost anything, step by step. Open the
+assistant, paste this prompt, and fill in what you want to do:
+
+> I own a Cytech Comfort smart-home system running on Home Assistant.
+>
+> I want to: *(describe what you want — for example "make my own dashboard
+> with the alarm status and my zone sensors", "send a phone notification when
+> the front door opens while the alarm is armed", or "show the Comfort battery
+> voltage on a page")*
+>
+> Facts about my system:
+> - The alarm is `alarm_control_panel.comfort_alarm` (states: disarmed,
+>   armed_home, armed_away, armed_night). The Alarm page's arm buttons call
+>   `script.comfort_arm_away`, `script.comfort_arm_night` and
+>   `script.comfort_arm_home`.
+> - Each Comfort zone is a binary sensor named like
+>   `binary_sensor.cytech_comfort_mqtt_input005` (on = open, off = closed).
+>   Bypass controls are `button.<zone name>_set_bypass` /
+>   `button.<zone name>_clear_bypass`, with the state in
+>   `sensor.<zone name>_bypass_status`.
+> - Battery readings: `sensor.cytech_comfort_mqtt_battery_status`,
+>   `sensor.cytech_comfort_mqtt_charger_status`,
+>   `sensor.cytech_comfort_mqtt_battery_main_voltage` and
+>   `sensor.cytech_comfort_mqtt_dc_supply_main_voltage`. Alarm/trouble status:
+>   `sensor.comfort_am_status`.
+> - Public references (safe to share):
+>   https://github.com/slychiu/ComfortHA-yaml and
+>   https://github.com/cytechtech/ucmpi4
+>
+> Give me step-by-step instructions using the current Home Assistant menus,
+> and tell me which screen to start from. If anything I do could affect the
+> alarm or lose my settings, warn me first.
+
+Then work through the assistant's answer in the Home Assistant app or a
+browser. If its steps do not match your screens, tell it your Home Assistant
+version (Settings → About) and ask it to adjust.
+
+**Rules that still apply:**
+
+- The four Cytech pages (Remote Access, Alarm, Battery Levels, Config Files)
+  are replaced by Cytech updates. Ask the assistant to help you create a
+  **new** dashboard for your own ideas — do not edit the Cytech pages.
+- Do not edit configuration files or `.storage` by hand, and do not change or
+  delete the automations Cytech installed (they run the self-checks, updates
+  and alert emails).
+- Never give an AI assistant your remote access link, Home Assistant login,
+  secret files or alarm PIN — see section 6. The assistant cannot see or
+  change your system; it only gives you instructions to carry out.
+- An automation can control the alarm. Be careful with anything that disarms
+  it, and never put your PIN on a dashboard or in a notification.
+- For the Comfort panel itself (zones, users, codes, programming), contact
+  Cytech support — the panel is programmed in Comfigurator, not in Home
+  Assistant.

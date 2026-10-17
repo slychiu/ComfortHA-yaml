@@ -66,6 +66,11 @@ views:
         **4 hours** if you don't turn it off first.
 
         Contact support@cytech.biz
+
+        **Owner Support Guide** — what each message means, what you can safely
+        do yourself, and how to do more with your system (automations, your
+        own dashboards, Comfort entities):
+        [Read the guide](https://github.com/slychiu/ComfortHA-yaml/blob/main/SUPPORT.md)
     - type: entities
       entities:
       - entity: input_boolean.remote_support_access

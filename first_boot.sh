@@ -1865,7 +1865,7 @@ PYEOF
 # the 4-hour timer are the same as when they press it themselves.
 request_email_activation() {
   local MARKER=/config/.cytech_email_activation_armed
-  local LAST DEVICE_ID TS_STATE EXPIRES AUTH_COUNT TRY TIMER_STATE NOTIFIED CODE
+  local LAST DEVICE_ID TS_STATE
   if [ -s /config/.cytech_secrets ]; then
     grep -q '^CYTECH_SECRETS_TOKEN=.' /config/.cytech_secrets 2>/dev/null && return 0
     if grep -q '^CY_SMTP_USER=.' /config/.cytech_secrets 2>/dev/null && \
@@ -1891,66 +1891,85 @@ request_email_activation() {
   # is a silent no-op -- no state change, no trigger, no operator key and no
   # timer. Reproduced live on the real image: the old code wrote the marker
   # while .remote_support_expires_at still held the image's Aug 1 value and
-  # authorized_keys held only the addon key. enable_remote_support.sh is the
-  # exact script the automation runs, and this function already executes in
-  # the SSH addon's context -- call it directly. A later owner-initiated
-  # off->on still runs the automation; a double run is harmless (same keys,
-  # fresh expiry).
-  bash /config/enable_remote_support.sh
-  EXPIRES=$(cat /config/.remote_support_expires_at 2>/dev/null)
-  case "$EXPIRES" in ''|*[!0-9]*) EXPIRES=0 ;; esac
-  AUTH_COUNT=$(grep -c . /etc/ssh/authorized_keys 2>/dev/null)
-  case "$AUTH_COUNT" in ''|*[!0-9]*) AUTH_COUNT=0 ;; esac
-  if [ "$EXPIRES" -le $(( $(date +%s) + 3600 )) ] || [ "$AUTH_COUNT" -lt 2 ]; then
-    # No marker: retry on the next Core start rather than waiting 6 hours.
-    echo "Could not arm Remote Support for alert-email activation (expiry ${EXPIRES:-none}, ${AUTH_COUNT} authorized key(s)) -- will retry after the next Core start."
-    return 0
-  fi
+  # authorized_keys held only the addon key.
+  #
+  # v56 (2026-10-23, published-55 E2E on the real image): first_boot.sh runs
+  # from the CORE container (configuration.yaml shell_command), NOT the addon
+  # -- the v55 note that said otherwise was based on invoking this function
+  # from an addon shell, which is not the boot path. From core, /etc/ssh/
+  # authorized_keys does not exist (so AUTH_COUNT read 0 and the arm bailed
+  # before any API call), and the core token gets 401 from the Supervisor's
+  # /core/api proxy (the same core-context failure the restart and Tailscale
+  # helpers already route around). Run the whole effect block ON THE SSH
+  # ADDON over ssh: its authorized_keys is the real one, its SUPERVISOR_TOKEN
+  # is accepted by /core/api, and enable_remote_support.sh plus the toggle/
+  # timer/notice calls are exactly what the verified owner flow uses. A later
+  # owner-initiated off->on still runs the automation; a double run is
+  # harmless (same keys, fresh expiry).
+  ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+    root@a0d7b954-ssh 'bash -s' <<'CY_ARM_EMAIL_EOF'
+MARKER=/config/.cytech_email_activation_armed
+# </dev/null is REQUIRED: this script arrives on bash -s's stdin, and
+# enable_remote_support.sh runs its own ssh, which would otherwise inherit
+# and swallow the rest of the script (verified live: the arm died right
+# after the key was installed, silently, because bash -s then hit EOF).
+bash /config/enable_remote_support.sh </dev/null
+EXPIRES=$(cat /config/.remote_support_expires_at 2>/dev/null)
+case "$EXPIRES" in ''|*[!0-9]*) EXPIRES=0 ;; esac
+AUTH_COUNT=$(grep -c . /etc/ssh/authorized_keys 2>/dev/null)
+case "$AUTH_COUNT" in ''|*[!0-9]*) AUTH_COUNT=0 ;; esac
+if [ "$EXPIRES" -le $(( $(date +%s) + 3600 )) ] || [ "$AUTH_COUNT" -lt 2 ]; then
+  # No marker: retry on the next Core start rather than waiting 6 hours.
+  echo "Could not arm Remote Support for alert-email activation (expiry ${EXPIRES:-none}, ${AUTH_COUNT} authorized key(s)) -- will retry after the next Core start."
+  exit 0
+fi
 
-  # Set the owner-visible toggle. No-op when already on; the effects above
-  # do not depend on this call or on the state trigger it would fire.
+# Set the owner-visible toggle. No-op when already on; the effects above
+# do not depend on this call or on the state trigger it would fire.
+curl -s -o /dev/null --max-time 15 -X POST \
+  -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
+  -d '{"entity_id":"input_boolean.remote_support_access"}' \
+  http://supervisor/core/api/services/input_boolean/turn_on
+
+# The 4-hour auto-off is the same timer the automation starts (its
+# timer.finished turns the toggle off, which removes the operator key).
+# Retry: this runs right after a Core start, when services can briefly be
+# unavailable.
+TIMER_STATE=""
+for TRY in 1 2 3; do
   curl -s -o /dev/null --max-time 15 -X POST \
     -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
-    -d '{"entity_id":"input_boolean.remote_support_access"}' \
-    http://supervisor/core/api/services/input_boolean/turn_on
+    -d '{"entity_id":"timer.remote_support_access"}' \
+    http://supervisor/core/api/services/timer/start
+  sleep 2
+  TIMER_STATE=$(curl -s --max-time 10 -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
+    http://supervisor/core/api/states/timer.remote_support_access 2>/dev/null \
+    | jq -r '.state // empty' 2>/dev/null)
+  [ "$TIMER_STATE" = "active" ] && break
+  sleep 5
+done
 
-  # The 4-hour auto-off is the same timer the automation starts (its
-  # timer.finished turns the toggle off, which removes the operator key).
-  # Retry: this runs right after a Core start, when services can briefly be
-  # unavailable.
-  TIMER_STATE=""
-  for TRY in 1 2 3; do
-    curl -s -o /dev/null --max-time 15 -X POST \
-      -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
-      -d '{"entity_id":"timer.remote_support_access"}' \
-      http://supervisor/core/api/services/timer/start
-    sleep 2
-    TIMER_STATE=$(curl -s --max-time 10 -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
-      http://supervisor/core/api/states/timer.remote_support_access 2>/dev/null \
-      | jq -r '.state // empty' 2>/dev/null)
-    [ "$TIMER_STATE" = "active" ] && break
-    sleep 5
-  done
+NOTIFIED=0
+for TRY in 1 2 3; do
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X POST \
+    -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
+    -d '{"title":"Alert email setup","message":"Cytech is completing the one-time activation of alert emails on this system. Remote Support Access is on for up to 4 hours and can be switched off on the Config Files page.","notification_id":"cytech_email_activation"}' \
+    http://supervisor/core/api/services/persistent_notification/create)
+  case "$CODE" in 200|201) NOTIFIED=1; break ;; esac
+  sleep 2
+done
 
-  NOTIFIED=0
-  for TRY in 1 2 3; do
-    CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X POST \
-      -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
-      -d '{"title":"Alert email setup","message":"Cytech is completing the one-time activation of alert emails on this system. Remote Support Access is on for up to 4 hours and can be switched off on the Config Files page.","notification_id":"cytech_email_activation"}' \
-      http://supervisor/core/api/services/persistent_notification/create)
-    case "$CODE" in 200|201) NOTIFIED=1; break ;; esac
-    sleep 2
-  done
-
-  if [ "$TIMER_STATE" = "active" ]; then
-    date +%s > "$MARKER"
-    echo "Remote Support armed for alert-email activation (window closes in 4 hours)."
-  else
-    # Key and expiry are already live; without the timer the toggle would
-    # never switch itself off. No marker, so the next Core start retries.
-    echo "Remote support is open but the 4-hour timer could not be started -- will retry after the next Core start."
-  fi
-  [ "$NOTIFIED" = 1 ] || echo "Warning: the alert-email activation notice could not be created."
+if [ "$TIMER_STATE" = "active" ]; then
+  date +%s > "$MARKER"
+  echo "Remote Support armed for alert-email activation (window closes in 4 hours)."
+else
+  # Key and expiry are already live; without the timer the toggle would
+  # never switch itself off. No marker, so the next Core start retries.
+  echo "Remote support is open but the 4-hour timer could not be started -- will retry after the next Core start."
+fi
+[ "$NOTIFIED" = 1 ] || echo "Warning: the alert-email activation notice could not be created."
+exit 0
+CY_ARM_EMAIL_EOF
 }
 
 ensure_email_secrets() {

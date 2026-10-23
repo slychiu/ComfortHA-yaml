@@ -37,6 +37,13 @@ SNAP = '/config/.cytech_snapshot/configuration.yaml'
 SNAP_PREV = '/config/.cytech_snapshot/configuration.yaml.previous'
 ALERT = '/config/.cytech_integrity_alert'
 STATUS = '/config/.cytech_integrity_status'
+# v55: update-restart backstop. .cytech_version is written by the updater when
+# new files land; .cytech_boot_result is rewritten on every first_boot pass
+# (check_boot_storm), so "version file newer than the last boot pass" means an
+# update applied but the Core restart it asked for never happened.
+VERSION = '/config/.cytech_version'
+BOOT_RESULT = '/config/.cytech_boot_result'
+RESTART_GUARD = '/config/.cytech_restart_guard.json'
 
 
 class TolerantLoader(yaml.SafeLoader):
@@ -122,6 +129,58 @@ def restart_core():
         write_status('restart_failed')
 
 
+def pending_update_restart():
+    """Restart Core if the last update applied but its restart never landed.
+
+    The updater marks .cytech_version when files land and then asks the
+    Supervisor for a Core restart; on a unit where the core container gets
+    401 from the Supervisor API that request can fail silently, leaving the
+    new first_boot.sh and packages on disk but nothing running them. This
+    script runs from the SSH addon, whose token works there, so it can finish
+    the job. Bounded to 3 attempts per version, 15 minutes apart -- a restart
+    that still does not stick is a real fault, not something to loop on.
+    """
+    try:
+        version = open(VERSION, 'r', encoding='utf-8').read().strip()
+        v_mtime = os.path.getmtime(VERSION)
+    except OSError:
+        return False
+    try:
+        with open(BOOT_RESULT, 'r', encoding='utf-8') as f:
+            last_pass = float(json.load(f).get('ts', 0))
+    except (OSError, ValueError, TypeError):
+        # The boot path writes this on every pass; without a baseline, doing
+        # nothing is safer than restarting on a guess.
+        return False
+    now = time.time()
+    if not version or v_mtime <= last_pass + 120:
+        return False
+    if now - v_mtime < 120:
+        return False  # let the updater's own restart land first
+    try:
+        with open(RESTART_GUARD, 'r', encoding='utf-8') as f:
+            guard = json.load(f)
+    except (OSError, ValueError, TypeError):
+        guard = {}
+    if guard.get('version') != version:
+        guard = {'version': version, 'attempts': 0}
+    if int(guard.get('attempts', 0)) >= 3:
+        return False
+    if now - float(guard.get('last', 0)) < 900:
+        return False
+    guard['attempts'] = int(guard.get('attempts', 0)) + 1
+    guard['last'] = now
+    try:
+        with open(RESTART_GUARD, 'w', encoding='utf-8') as f:
+            json.dump(guard, f)
+    except OSError:
+        return False
+    print('update to %s landed after the last boot pass; requesting Core '
+          'restart (attempt %d/3)' % (version, guard['attempts']))
+    restart_core()
+    return True
+
+
 def main():
     if not os.path.exists(CONFIG):
         write_status('missing')
@@ -134,6 +193,11 @@ def main():
         except OSError:
             pass
         write_status('ok')
+        # A clean config can still be one that no running process has loaded
+        # yet; only the boot-pass comparison can tell, and only after the
+        # corruption path above has had its say (restarting a unit into a
+        # corrupt config would drop it into recovery mode).
+        pending_update_restart()
         sys.exit(0)
 
     # corrupt

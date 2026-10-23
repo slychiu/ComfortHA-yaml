@@ -19,6 +19,13 @@
 #                    a dead end for a freshly re-imaged unit). The owner can
 #                    still never make the system send mail; only the fetched
 #                    credentials can.
+#   no token      -> v55: pre-2026-09-06 images have no CYTECH_SECRETS_TOKEN,
+#                    so the fetch above never runs and "press Register again"
+#                    was a promise the unit could not keep. The status now
+#                    says a one-time Cytech activation is needed. The boot
+#                    path opens a Remote Support window for it automatically
+#                    (first_boot.sh request_email_activation); the owner only
+#                    acts if that did not happen.
 # Every outcome ALSO writes /config/.cytech_register_popup, which the v40
 # automation turns into a screen popup -- Register always has a visible
 # return status, not just the small inline line. CY_SMTP_RECIPIENT is stored
@@ -101,6 +108,16 @@ if os.path.exists(CFG):
                 VALUES[k.strip()] = v.strip()
 
 if not VALUES.get('CY_SMTP_PASS') or not VALUES.get('CY_SMTP_USER'):
+    # v55: without CYTECH_SECRETS_TOKEN the credentials can never arrive, so
+    # "press Register again in a few minutes" was untrue and cost real
+    # support rounds. Say what is actually needed; the boot path arms Remote
+    # Support for this automatically (first_boot.sh request_email_activation).
+    if not VALUES.get('CYTECH_SECRETS_TOKEN'):
+        outcome('ERROR', 'Alert emails need a one-time activation by Cytech '
+                         'and cannot finish by pressing Register again. '
+                         'Remote Support Access opens automatically for this; '
+                         'if it is off on the Config Files page, switch it on '
+                         'and contact support@cytech.biz.')
     outcome('ERROR', 'Alert emails are still finishing setup on this system '
                      '-- this finishes automatically. Please press Register '
                      'again in a few minutes.')

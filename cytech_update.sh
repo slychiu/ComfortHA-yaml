@@ -13,6 +13,71 @@ notify() {
   echo "$json" | tee /config/.cytech_notify_pending > /config/.cytech_last_result
 }
 
+# v55: restart Core so the just-applied files actually load. Core-context can
+# 401 on some units; the SSH addon's token works there, and its own integrity
+# watcher (cytech_integrity_check.py) is the third backstop. 000 counts as
+# success -- core may cut the connection after starting the restart.
+restart_core_verified() {
+  local CODE FALLBACK
+  touch /config/.cytech_planned_restart 2>/dev/null || true
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+    -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
+    http://supervisor/core/restart 2>/dev/null)
+  case "$CODE" in
+    200|201|000)
+      echo "HA restarting to apply dashboard/package/first_boot changes..."
+      return 0
+      ;;
+  esac
+  echo "Core-context restart returned ${CODE:-no response}; retrying through the SSH addon..."
+  FALLBACK=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no \
+    -o ConnectTimeout=10 root@a0d7b954-ssh \
+    'curl -s -o /dev/null -w "%{http_code}" --max-time 10 -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/restart' \
+    2>/dev/null)
+  case "$FALLBACK" in
+    200|201|000)
+      echo "HA restarting to apply dashboard/package/first_boot changes..."
+      return 0
+      ;;
+  esac
+  echo "Restart could not be confirmed (${FALLBACK:-no response}); the integrity watcher will restart HA within 5 minutes."
+  return 1
+}
+
+# v55: true when the version file is newer than the last first_boot pass --
+# i.e. an update's files are on disk but no Core start has loaded them yet.
+# Used on the "already up to date" path: without this, a press after a missed
+# restart (the old fire-and-forget bug) reported "already on the latest
+# version" and did nothing, so the only remaining recovery was a reboot.
+# The 5-minute floors keep it from racing the watcher or a boot in progress.
+pending_restart() {
+  local V_MTIME LAST_PASS NOW GUARD
+  [ -f /config/.cytech_version ] || return 1
+  V_MTIME=$(stat -c %Y /config/.cytech_version 2>/dev/null) || return 1
+  if [ -f /config/.cytech_boot_result ]; then
+    LAST_PASS=$(jq -r '.ts // 0' /config/.cytech_boot_result 2>/dev/null)
+    case "$LAST_PASS" in ''|*[!0-9]*) return 1 ;; esac
+  else
+    # 2026-10-23 (real v30 image, 260801 capture): images older than v35 --
+    # which is exactly the class with no integrity watcher either -- never
+    # write .cytech_boot_result. Without this branch the owner's second
+    # "Update Now" after a missed restart still says "already on the latest
+    # version" and does nothing, so those units had no local recovery at all
+    # (reproduced live: old updater landed v55 over a 403, second press did
+    # nothing). With no baseline, use 0; the >=300 s write-age and guard
+    # floors below still prevent racing a boot or looping, and the first
+    # successful restart makes first_boot (v35+) write the real timestamp.
+    LAST_PASS=0
+  fi
+  NOW=$(date +%s)
+  [ "$V_MTIME" -gt $((LAST_PASS + 120)) ] || return 1
+  [ $((NOW - V_MTIME)) -ge 300 ] || return 1
+  GUARD=$(jq -r '.last // 0' /config/.cytech_restart_guard.json 2>/dev/null)
+  case "$GUARD" in ''|*[!0-9]*) GUARD=0 ;; esac
+  [ $((NOW - GUARD)) -ge 300 ] || return 1
+  return 0
+}
+
 # Version ordering with letter revisions: "42b" > "42a", "43" > "42z" (handled
 # by the integer branch, unaffected by letters). SAME-BASE bare-vs-lettered
 # ("45" vs "45a"): the bare (letterless) release is always the fleet
@@ -51,8 +116,15 @@ fi
 REMOTE_VER=$(echo "$MANIFEST" | jq -r '.version // 0')
 
 if ! ver_newer "$REMOTE_VER" "$LOCAL_VER"; then
-  notify "Already on the latest version (v${LOCAL_VER})."
-  rm -f /config/.cytech_update_pending
+  # v55: if the last update landed but never restarted, a second press is the
+  # owner's only local recovery -- make it restart instead of doing nothing.
+  if pending_restart; then
+    notify "Finishing the last update -- HA is restarting."
+    restart_core_verified
+  else
+    notify "Already on the latest version (v${LOCAL_VER})."
+    rm -f /config/.cytech_update_pending
+  fi
   exit 0
 fi
 
@@ -170,11 +242,15 @@ print('${DEST} updated (previous config backed up to ${DEST}.pre_update_backup)'
 # (the welcome dashboard is YAML-mode now), so every update raised a
 # FileNotFoundError and left the json on disk to re-fail next time.
 if [ "$LOVELACE_CHANGED" = "1" ] || [ "$PACKAGES_CHANGED" = "1" ] || [ "$FIRSTBOOT_CHANGED" = "1" ]; then
-  # v45: mark this as a planned restart so record_boot_event() (first_boot.sh)
-  # doesn't count it toward Repeated Restarts -- an update applying is not an
-  # instability signal.
-  touch /config/.cytech_planned_restart 2>/dev/null || true
-  curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
-    http://supervisor/core/restart
-  echo "HA restarting to apply dashboard/package/first_boot changes..."
+  # v45: restart_core_verified() marks this as a planned restart so
+  # record_boot_event() (first_boot.sh) doesn't count it toward Repeated
+  # Restarts -- an update applying is not an instability signal.
+  #
+  # v55: this used to be a fire-and-forget curl. On a unit whose core
+  # container gets 401 from the Supervisor API, the update applied its files
+  # and then silently never restarted -- and everything that only runs on a
+  # Core start (the v54 provisioning repair, the boot-time ensures) never ran
+  # either. The helper checks the result, retries through the SSH addon, and
+  # leaves the addon's integrity watcher as the last backstop.
+  restart_core_verified
 fi

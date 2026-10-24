@@ -1853,7 +1853,7 @@ PYEOF
 # without it every Register press ends in "not configured" forever. The fix is
 # a one-time operator seed over the Remote Support channel, but making the
 # owner find and flip that toggle is another support round-trip. So arm the
-# same 4-hour support window the owner would (the automation runs
+# same 10-hour support window the owner would (the automation runs
 # enable_remote_support.sh and starts the timer), show a notification saying
 # what it is for, and let the operator finish setup. Conditions:
 #   - no secrets token AND no working SMTP credential already present;
@@ -1862,7 +1862,7 @@ PYEOF
 #   - at most one arm per 6 hours, so a failed support call cannot open a new
 #     window on every boot.
 # Nothing here touches the owner's only way to switch it off: the toggle and
-# the 4-hour timer are the same as when they press it themselves.
+# the 10-hour timer are the same as when they press it themselves.
 request_email_activation() {
   local MARKER=/config/.cytech_email_activation_armed
   local LAST DEVICE_ID TS_STATE
@@ -1931,7 +1931,7 @@ curl -s -o /dev/null --max-time 15 -X POST \
   -d '{"entity_id":"input_boolean.remote_support_access"}' \
   http://supervisor/core/api/services/input_boolean/turn_on
 
-# The 4-hour auto-off is the same timer the automation starts (its
+# The 10-hour auto-off is the same timer the automation starts (its
 # timer.finished turns the toggle off, which removes the operator key).
 # Retry: this runs right after a Core start, when services can briefly be
 # unavailable.
@@ -1953,7 +1953,7 @@ NOTIFIED=0
 for TRY in 1 2 3; do
   CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X POST \
     -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" \
-    -d '{"title":"Alert email setup","message":"Cytech is completing the one-time activation of alert emails on this system. Remote Support Access is on for up to 4 hours and can be switched off on the Config Files page.","notification_id":"cytech_email_activation"}' \
+    -d '{"title":"Alert email setup","message":"Cytech is completing the one-time activation of alert emails on this system. Remote Support Access is on for up to 10 hours and can be switched off on the Config Files page.","notification_id":"cytech_email_activation"}' \
     http://supervisor/core/api/services/persistent_notification/create)
   case "$CODE" in 200|201) NOTIFIED=1; break ;; esac
   sleep 2
@@ -1961,11 +1961,11 @@ done
 
 if [ "$TIMER_STATE" = "active" ]; then
   date +%s > "$MARKER"
-  echo "Remote Support armed for alert-email activation (window closes in 4 hours)."
+  echo "Remote Support armed for alert-email activation (window closes in 10 hours)."
 else
   # Key and expiry are already live; without the timer the toggle would
   # never switch itself off. No marker, so the next Core start retries.
-  echo "Remote support is open but the 4-hour timer could not be started -- will retry after the next Core start."
+  echo "Remote support is open but the 10-hour timer could not be started -- will retry after the next Core start."
 fi
 [ "$NOTIFIED" = 1 ] || echo "Warning: the alert-email activation notice could not be created."
 exit 0
@@ -2139,6 +2139,13 @@ start_tailscale_addon() {
     >/dev/null 2>&1 || true
 }
 
+# v57: tailnet node IDs baked into raw-capture SD images (captured from a
+# provisioned master without reset.sh). Any running unit whose Tailscale
+# reports one of these is a clone sharing the master's node, never a unit
+# that provisioned itself. Append future captures here; keep the list
+# space-separated (checked one ID per line with grep -Fqx).
+KNOWN_BAKED_TAILSCALE_IDS="ncW1AjYbye11CNTRL"
+
 # 1. Maintenance mode — already provisioned, just run health checks
 if [ -f /config/.zero_touch_completed ]; then
   # .reset_cycle_active still guards against this branch's dashboard/DNS
@@ -2225,22 +2232,53 @@ if [ -f /config/.zero_touch_completed ]; then
     if [ "$TS_STATE" = "Running" ]; then
       STORED_ID=$(cat /config/device_id.txt 2>/dev/null)
 
-      # Compare full Tailscale DNSName against stored external_url.
-      # Catches hostname changes AND tailnet domain changes (e.g. user switches to personal Tailscale).
-      CURRENT_FULL_DNS=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
+      # One status read feeds both checks below: v57 needs .Self.ID and the
+      # URL check needs .Self.DNSName -- same ssh round-trip either way.
+      TS_STATUS_JSON=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@a0d7b954-ssh \
         "docker exec app_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null" \
-        2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//')
-      STORED_EXTERNAL=$(python3 -c \
-        "import json; d=json.load(open('/config/.storage/core.config')); \
-         print(d['data'].get('external_url','').replace('https://',''))" 2>/dev/null)
-      echo "Tailscale DNSName: ${CURRENT_FULL_DNS}, stored external_url: ${STORED_EXTERNAL}"
+        2>/dev/null)
+      SELF_NODE_ID=$(printf '%s' "$TS_STATUS_JSON" | jq -r '.Self.ID // empty' 2>/dev/null)
 
-      if [ -n "$CURRENT_FULL_DNS" ] && [ "$CURRENT_FULL_DNS" != "$STORED_EXTERNAL" ]; then
-        echo "URL mismatch: stored=${STORED_EXTERNAL} actual=${CURRENT_FULL_DNS}. Accepting and repairing..."
-        launch_maintenance_repair "$CURRENT_FULL_DNS"
-        exit 0
+      # v57: raw-capture repair for a baked identity that still WORKS. The
+      # v54 branch below only fires when Tailscale cannot reach Running. An
+      # image captured from a provisioned master WITHOUT reset.sh carries the
+      # master's tailscaled.state; if that machine key still authenticates,
+      # the clone reaches Running and silently shares the master's tailnet
+      # node, so v54 never sees it. Live proof 2026-10-23: 260801 bakes node
+      # ncW1AjYbye11CNTRL (created 2026-08-01T03:01:33Z); the bench and
+      # customer Jay's unit both reported device_id cytech-9 / Self.ID
+      # ncW1AjYbye11CNTRL, and the Funnel endpoint flipped between them.
+      # A node ID in KNOWN_BAKED_TAILSCALE_IDS belongs to the captured image,
+      # never to a unit that provisioned itself, so seeing it proves the
+      # completion flag is false. Repair exactly like v54, then fall through
+      # into fresh provisioning IN THIS PASS. Any other node ID (including an
+      # unreadable status -> empty) keeps the existing URL check unchanged.
+      if [ -n "$SELF_NODE_ID" ] && \
+         printf '%s\n' $KNOWN_BAKED_TAILSCALE_IDS | grep -Fqx "$SELF_NODE_ID"; then
+        echo "FAKE-PROVISIONED (live baked identity): Tailscale node ${SELF_NODE_ID} is the captured image's identity, not this unit's own."
+        echo "Clearing the false completion flag and the baked identity, then re-provisioning in this pass."
+        rm -f /config/.zero_touch_completed /config/.dev_reset_mode
+        rm -f /config/.ssh/id_rsa /config/.ssh/id_rsa.pub
+        rm -f /config/www/remote_access_qr.png
+        echo "Initializing Secure Link..." > /config/device_id.txt
+        touch /config/.force_fresh_identity
+        REPROVISIONING=1
       else
-        echo "URL OK: ${CURRENT_FULL_DNS}"
+        # Compare full Tailscale DNSName against stored external_url.
+        # Catches hostname changes AND tailnet domain changes (e.g. user switches to personal Tailscale).
+        CURRENT_FULL_DNS=$(printf '%s' "$TS_STATUS_JSON" | jq -r '.Self.DNSName // empty' 2>/dev/null | sed 's/\.$//')
+        STORED_EXTERNAL=$(python3 -c \
+          "import json; d=json.load(open('/config/.storage/core.config')); \
+           print(d['data'].get('external_url','').replace('https://',''))" 2>/dev/null)
+        echo "Tailscale DNSName: ${CURRENT_FULL_DNS}, stored external_url: ${STORED_EXTERNAL}"
+
+        if [ -n "$CURRENT_FULL_DNS" ] && [ "$CURRENT_FULL_DNS" != "$STORED_EXTERNAL" ]; then
+          echo "URL mismatch: stored=${STORED_EXTERNAL} actual=${CURRENT_FULL_DNS}. Accepting and repairing..."
+          launch_maintenance_repair "$CURRENT_FULL_DNS"
+          exit 0
+        else
+          echo "URL OK: ${CURRENT_FULL_DNS}"
+        fi
       fi
 
     else
@@ -2250,6 +2288,7 @@ if [ -f /config/.zero_touch_completed ]; then
       rm -f /config/.ssh/id_rsa /config/.ssh/id_rsa.pub
       rm -f /config/www/remote_access_qr.png
       echo "Initializing Secure Link..." > /config/device_id.txt
+      touch /config/.force_fresh_identity
       REPROVISIONING=1
     fi
   fi
@@ -2315,9 +2354,27 @@ apply_usb_host_mode_fix
 # this way. A genuinely fresh clone from the golden image has no Running
 # Tailscale state at this point (reset.sh wipes it at capture time), so this
 # doesn't affect normal first-ever-boot provisioning.
+# v57: the fake-provisioned repairs above clear .zero_touch_completed and
+# fall through to here while the baked Tailscale identity may STILL be
+# Running. The reuse branch below reads any Running identity as an
+# interrupted prior run and keeps it -- which would undo the repair and loop
+# (repair -> reuse -> complete -> repair; live bench proof 2026-10-23). The
+# flag forces the production wipe regardless of what Tailscale reports. It
+# survives an interrupted pass so a retry still wipes, and is removed only
+# once a hostname has actually been obtained.
+FORCE_FRESH_IDENTITY=0
+if [ -f /config/.force_fresh_identity ]; then
+  FORCE_FRESH_IDENTITY=1
+  echo "Forcing a fresh Tailscale identity (fake-provisioned repair flag present)."
+fi
+
 EXISTING_FULL_DNS=$(ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no root@a0d7b954-ssh \
   "docker exec app_a0d7b954_tailscale /opt/tailscale status --json 2>/dev/null" \
   | jq -r 'select(.BackendState=="Running") | .Self.DNSName // empty' | sed 's/\.$//')
+
+if [ "$FORCE_FRESH_IDENTITY" = "1" ]; then
+  EXISTING_FULL_DNS=""
+fi
 
 if [ -f /config/.dev_reset_mode ] || [ -n "$EXISTING_FULL_DNS" ]; then
   if [ -f /config/.dev_reset_mode ]; then
@@ -2365,6 +2422,7 @@ fi
 
 # 9. THE SAFETY CHECK: Did Tailscale connect and assign a hostname?
 if [ -n "$ACTUAL_HOSTNAME" ]; then
+    rm -f /config/.force_fresh_identity
     echo "SUCCESS: Tailscale connected as ${ACTUAL_FULL_DNS}."
     echo "$ACTUAL_HOSTNAME" > /config/device_id.txt
     DEVICE_ID="$ACTUAL_HOSTNAME"

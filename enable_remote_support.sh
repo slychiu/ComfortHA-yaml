@@ -1,5 +1,5 @@
 #!/bin/bash
-# Grants the Cytech operator SSH key access for 4 hours. Invoked by the
+# Grants the Cytech operator SSH key access for 10 hours. Invoked by the
 # "Remote Support Access" toggle turning on (packages/cytech.yaml). Takes
 # effect immediately (does not wait for a reboot/maintenance pass) by
 # re-running the same authorized_keys sync ensure_ssh_admin_access() does in
@@ -9,13 +9,14 @@
 exec >> /config/cytech_update.log 2>&1
 echo "=== enable_remote_support.sh $(date) ==="
 
-# 4 hours, not 1: the window has to outlast the gap between a customer
+# 10 hours, not 4: the window has to outlast the gap between a customer
 # pressing the toggle and the operator seeing it, and customers sit in
-# time zones up to 12 h away from Cytech's. Keep this in step with the
-# duration of timer.remote_support_access in packages/cytech.yaml -- the
-# HA timer is what turns the toggle back off, this timestamp is what
-# first_boot.sh trusts on the next Core start.
-EXPIRES=$(( $(date +%s) + 14400 ))
+# time zones up to 12 h away from Cytech's. Four hours repeatedly expired
+# before an overseas owner's working day overlapped the operator's. Keep
+# this in step with the duration of timer.remote_support_access in
+# packages/cytech.yaml -- the HA timer is what turns the toggle back off,
+# this timestamp is what first_boot.sh trusts on the next Core start.
+EXPIRES=$(( $(date +%s) + 36000 ))
 echo "$EXPIRES" > /config/.remote_support_expires_at
 
 PUB_KEY=$(cat /config/.ssh/id_rsa.pub 2>/dev/null)

@@ -44,9 +44,9 @@ On the **Config Files** page:
 
 - **System Version** — the configuration version number. Support may ask for it.
 - **Check for Update** / **Update Now** / **Skip this version** — see section 3.
-- **Remote Support Access** — turns on a 4-hour window in which Cytech support
+- **Remote Support Access** — turns on a 10-hour window in which Cytech support
   can connect remotely for troubleshooting. It switches itself off
-  automatically after 4 hours.
+  automatically after 10 hours.
 - **System Health** — SD Card rows (**Card Errors**, **Write Test**,
   **Warnings**, **Config Check**), a **Network** line and **Check Network Port**
   button.
@@ -124,7 +124,7 @@ amount of data and could make a failing card worse.
   press the button. Then **Send Test Email** to confirm it works. Alerts then
   reach you *and* Cytech.
 - **Remote Support Access** — turn on during a support session; it turns itself
-  off after 4 hours.
+  off after 10 hours.
 - **Dismiss Warning** — only to clear a notice that was expected (for example,
   restarts you did yourself).
 
